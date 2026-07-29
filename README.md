@@ -118,12 +118,14 @@ This section grows as the project does; each phase documents the trade-offs it m
 
 | Layer | Command | Count |
 |-------|---------|-------|
-| Rust engine | `cargo test` | 22 (unit + seeded recall vs. brute force + doctest) |
+| Rust engine | `cargo test` | 23 (unit + seeded recall vs. brute force + doctest) |
 | Python bindings + helpers | `pytest` in `bindings/` | 16 (FFI surface, recall vs. brute force, chunking, embeddings, E2E retrieval) |
-| RAG service | `PYTHONPATH=. pytest` in `service/` | 7 (keyless E2E via FastAPI TestClient) |
+| RAG service | `PYTHONPATH=. pytest` in `service/` | 12 (keyless E2E via FastAPI TestClient + citation parsing) |
 | Next.js app | `npm run build` | type-checked production build |
 
-CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and the Python bindings suite on every push.
+CI (`.github/workflows/ci.yml`) runs all four on every push, in parallel jobs: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`, the bindings suite, the service suite, and the app build.
+
+The bindings job installs with `pip install ./bindings` rather than `maturin develop`. That is deliberate: `maturin develop` installs *editable*, which would mask whether the built wheel actually ships the pure-Python `hnsw_rag` package alongside the compiled module. Installing the real wheel is what catches that.
 
 ## License
 

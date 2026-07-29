@@ -7,7 +7,7 @@
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
-use ::hnsw_engine as engine;
+use hnsw_engine as engine;
 
 /// When `ef_search` is not given, use `max(4 * k, 50)` — comfortably above
 /// the knee of the recall curve for typical corpus sizes (see the README

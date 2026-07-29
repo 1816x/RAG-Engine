@@ -32,11 +32,49 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install maturin + pytest
-        run: pip install maturin pytest
-      - name: Build extension
-        working-directory: bindings
-        run: maturin develop --release
+      # `pip install ./bindings` builds the extension through maturin's PEP 517
+      # backend. Do NOT use `maturin develop` here: it requires an active
+      # virtualenv, and it installs editable — which would also hide whether the
+      # built wheel actually ships the pure-Python `hnsw_rag` package.
+      - name: Build and install the extension
+        run: pip install ./bindings pytest
       - name: Pytest
         working-directory: bindings
         run: python -m pytest tests/ -q
+
+  service:
+    name: RAG service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine bindings + service deps
+        run: |
+          pip install ./bindings
+          pip install -r service/requirements-dev.txt
+      # No ANTHROPIC_API_KEY: the service runs in keyless mock mode, so the
+      # retrieval path is exercised end to end without a key or network.
+      - name: Pytest
+        working-directory: service
+        run: PYTHONPATH=. python -m pytest tests/ -q
+
+  app:
+    name: Next.js app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install
+        working-directory: app
+        run: npm ci
+      - name: Build (type-checks the app)
+        working-directory: app
+        run: npm run build

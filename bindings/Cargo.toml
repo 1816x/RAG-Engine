@@ -6,7 +6,11 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "hnsw_engine"
+# Must NOT be `hnsw_engine`: that is the engine crate's lib name, and two libs
+# with the same name in one workspace make rustdoc fail with E0464 ("multiple
+# candidates for rlib dependency"). maturin places the built artifact according
+# to `module-name` in pyproject.toml, so this name is internal only.
+name = "hnsw_engine_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
