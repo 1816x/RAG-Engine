@@ -29,7 +29,7 @@ documents → [Python: chunking + embeddings]
 ## Roadmap
 
 - [x] **Phase 0 — Scaffolding**: workspace layout, README with architecture.
-- [ ] **Phase 1 — Vertical slice**: minimal HNSW supporting insert + search over random vectors, correctness-tested against brute force.
+- [x] **Phase 1 — Vertical slice**: minimal HNSW supporting insert + search over random vectors, correctness-tested against brute force.
 - [ ] **Phase 2 — Iteration**: benchmarks vs. brute-force search (real numbers in this README, not invented ones), recall tests, parameter tuning (`M`, `ef_construction`).
 - [ ] **Phase 3 — Bindings + real embeddings**: PyO3 bindings, real embedding model, document chunking.
 - [ ] **Phase 4 — Full RAG**: Claude API integration with cited sources, Next.js app.
