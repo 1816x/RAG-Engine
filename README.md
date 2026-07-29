@@ -27,14 +27,57 @@ documents → [Python: chunking + embeddings]
 | `service/`  | Python | FastAPI RAG service: chunk → embed → HNSW retrieve → Claude answer with cited sources. Runs keyless in mock mode. |
 | `app/`      | TypeScript | Next.js chat UI: ask questions, see the answer and retrieved sources (cited chunks highlighted). |
 
+## Quick start
+
+Each layer runs on its own; you only need the ones you care about.
+
+**1. The Rust engine (no Python, no Node):**
+
+```sh
+cargo test                              # 22 tests, incl. seeded recall vs. brute force
+cargo run --release --example bench     # the benchmark table below
+```
+
+**2. Python bindings + helpers:**
+
+```sh
+cd bindings
+python3 -m venv .venv && . .venv/bin/activate
+pip install maturin pytest
+maturin develop --release               # builds the Rust extension into the venv
+pytest tests/                           # 16 tests through the FFI boundary
+```
+
+```python
+from hnsw_engine import Hnsw
+idx = Hnsw(dim=384, metric="cosine")
+idx.insert_batch(vectors)               # -> [0, 1, 2, ...]
+idx.search(query, k=10)                 # -> [(id, distance), ...] closest first
+```
+
+**3. Full RAG (service + app):** the service runs **without an API key** in mock mode, so you can see the whole pipeline before adding one.
+
+```sh
+# terminal 1 — the Python service (reuses the bindings venv)
+cd service && pip install -r requirements.txt
+uvicorn rag_service.app:app --port 8000
+python scripts/seed.py                  # upload the sample corpus
+
+# terminal 2 — the Next.js UI
+cd app && npm install
+RAG_SERVICE_URL=http://localhost:8000 npm run dev   # http://localhost:3000
+```
+
+Set `ANTHROPIC_API_KEY` before starting the service to get real Claude-generated answers instead of the extractive mock. The retrieval layer (HNSW search + cited sources) is identical either way.
+
 ## Roadmap
 
 - [x] **Phase 0 — Scaffolding**: workspace layout, README with architecture.
 - [x] **Phase 1 — Vertical slice**: minimal HNSW supporting insert + search over random vectors, correctness-tested against brute force.
-- [ ] **Phase 2 — Iteration**: benchmarks vs. brute-force search (real numbers in this README, not invented ones), recall tests, parameter tuning (`M`, `ef_construction`).
-- [ ] **Phase 3 — Bindings + real embeddings**: PyO3 bindings, real embedding model, document chunking.
-- [ ] **Phase 4 — Full RAG**: Claude API integration with cited sources, Next.js app.
-- [ ] **Phase 5 — Release**: `v0.1.0`, benchmark table (latency/recall vs. brute force).
+- [x] **Phase 2 — Iteration**: benchmarks vs. brute-force search (real numbers in this README, not invented ones), recall tests, parameter tuning (`M`, `ef_construction`).
+- [x] **Phase 3 — Bindings + real embeddings**: PyO3 bindings, real embedding model, document chunking.
+- [x] **Phase 4 — Full RAG**: Claude API integration with cited sources, Next.js app.
+- [x] **Phase 5 — Release**: `v0.1.0`, benchmark table (latency/recall vs. brute force).
 
 ## Benchmarks
 
@@ -69,3 +112,19 @@ This section grows as the project does; each phase documents the trade-offs it m
 - **Contiguous vector storage**: vectors live in one flat `Vec<f32>` (row stride = dim), not `Vec<Vec<f32>>`. Distance evaluation is the hot loop; removing a pointer indirection per evaluation roughly halved both build and query time in measurement.
 - **Bitset visited-set**: the per-search visited set is a reusable bitset (n/8 bytes, cleared with one memset) instead of a `HashSet` — cheaper to clear, cheaper to probe, and keeps `search(&self)` shareable across threads by using a per-call instance.
 - **Diversity heuristic over "closest M"** (Algorithm 4 of the paper): neighbors are kept only if they're closer to the query than to already-kept neighbors, spreading links across directions. This is what keeps the graph navigable through sparse regions; without it, recall on clustered data collapses at cluster boundaries.
+- **Keyless mock mode in the RAG service**: the demo answers questions with an extractive fallback when no `ANTHROPIC_API_KEY` is set, and the embeddings layer falls back to a deterministic hashed embedder when `sentence-transformers` isn't installed. Both keep the end-to-end app — and its tests — runnable anywhere, with real Claude answers and real embeddings one env var / one `pip install` away.
+
+## Tests
+
+| Layer | Command | Count |
+|-------|---------|-------|
+| Rust engine | `cargo test` | 22 (unit + seeded recall vs. brute force + doctest) |
+| Python bindings + helpers | `pytest` in `bindings/` | 16 (FFI surface, recall vs. brute force, chunking, embeddings, E2E retrieval) |
+| RAG service | `PYTHONPATH=. pytest` in `service/` | 7 (keyless E2E via FastAPI TestClient) |
+| Next.js app | `npm run build` | type-checked production build |
+
+CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and the Python bindings suite on every push.
+
+## License
+
+MIT.
