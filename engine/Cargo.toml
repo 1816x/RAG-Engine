@@ -1,0 +1,8 @@
+[package]
+name = "hnsw-engine"
+description = "HNSW vector index written from scratch, with a brute-force baseline for benchmarking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
