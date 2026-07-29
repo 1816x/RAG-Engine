@@ -9,6 +9,7 @@ RAG app is demoable — and testable in CI — without a key or network.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -40,6 +41,25 @@ def _format_sources(chunks: List[RetrievedChunk]) -> str:
     for i, c in enumerate(chunks, start=1):
         blocks.append(f"[{i}] (source: {c.doc_title})\n{c.text}")
     return "\n\n".join(blocks)
+
+
+def parse_citations(text: str, chunks: List[RetrievedChunk]) -> List[int]:
+    """Map the `[n]` markers in an answer back to the chunk ids they refer to.
+
+    The sources are numbered 1..len(chunks) in the prompt, so `[2]` means
+    `chunks[1]`. Out-of-range markers (the model inventing `[9]` for three
+    sources) are ignored rather than trusted. Returns ids in first-mention
+    order, deduplicated — so a "cited" flag actually means the answer used
+    that chunk, instead of just "we retrieved it".
+    """
+    cited: List[int] = []
+    for marker in re.findall(r"\[(\d+)\]", text):
+        idx = int(marker) - 1
+        if 0 <= idx < len(chunks):
+            cid = chunks[idx].id
+            if cid not in cited:
+                cited.append(cid)
+    return cited
 
 
 def _mock_answer(question: str, chunks: List[RetrievedChunk]) -> Answer:
@@ -109,10 +129,8 @@ def generate_answer(
         )
 
     text = "".join(block.text for block in response.content if block.type == "text")
-    # We surface every retrieved chunk as a candidate source; the [n] markers in
-    # the text tell the reader which were actually used.
     return Answer(
         text=text,
-        cited_chunk_ids=[c.id for c in chunks],
+        cited_chunk_ids=parse_citations(text, chunks),
         model=model,
     )

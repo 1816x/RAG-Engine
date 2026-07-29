@@ -22,3 +22,9 @@ features = ["pyo3/extension-module"]
 module-name = "hnsw_engine._native"
 manifest-path = "Cargo.toml"
 python-source = "python"
+# maturin's mixed layout only packages the module named by `module-name` — the
+# sibling `hnsw_rag` package would be missing from the built wheel (and only
+# importable under `maturin develop`, which installs editable). Ship it
+# explicitly; maturin strips the `python-source` prefix, so it lands at the
+# wheel root and imports as `hnsw_rag`.
+include = [{ path = "python/hnsw_rag/**/*.py", format = ["sdist", "wheel"] }]
