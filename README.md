@@ -23,8 +23,9 @@ documents → [Python: chunking + embeddings]
 | Path        | Language   | What it is |
 |-------------|------------|------------|
 | `engine/`   | Rust       | The HNSW index itself: insert, layered greedy search, neighbor-selection heuristic, brute-force baseline. Zero runtime dependencies. |
-| `bindings/` | Rust + Python | PyO3 bindings exposing the engine as a Python package (Phase 3). |
-| `app/`      | TypeScript | Next.js RAG app: upload documents, ask questions, see retrieved sources + Claude-generated answers (Phase 4). |
+| `bindings/` | Rust + Python | PyO3 bindings exposing the engine as a Python package, plus `hnsw_rag` helpers (chunking + pluggable embeddings). |
+| `service/`  | Python | FastAPI RAG service: chunk → embed → HNSW retrieve → Claude answer with cited sources. Runs keyless in mock mode. |
+| `app/`      | TypeScript | Next.js chat UI: ask questions, see the answer and retrieved sources (cited chunks highlighted). |
 
 ## Roadmap
 

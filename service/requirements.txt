@@ -1,0 +1,8 @@
+# The RAG service. Install the engine bindings from ../bindings first:
+#   pip install maturin && (cd ../bindings && maturin develop --release)
+# then:  pip install -r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+anthropic>=0.40          # optional at runtime — service runs keyless without a key
+# sentence-transformers>=2.2   # optional: real embeddings (else hashed fallback)
