@@ -1,5 +1,5 @@
 [workspace]
-members = ["engine"]
+members = ["engine", "bindings"]
 resolver = "2"
 
 [workspace.package]

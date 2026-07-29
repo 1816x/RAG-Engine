@@ -21,3 +21,22 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
+
+  bindings:
+    name: Python bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install maturin + pytest
+        run: pip install maturin pytest
+      - name: Build extension
+        working-directory: bindings
+        run: maturin develop --release
+      - name: Pytest
+        working-directory: bindings
+        run: python -m pytest tests/ -q
