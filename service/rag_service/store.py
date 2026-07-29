@@ -140,6 +140,10 @@ class DocumentStore:
                 "chunks": len(self._chunks),
                 "dim": self.dim,
                 "metric": self.metric,
+                # Which embedding backend is actually live. Worth surfacing:
+                # HashedEmbedder matches on term overlap, not meaning, so a
+                # reader should not mistake it for semantic search.
+                "embedder": type(self.embedder).__name__,
             }
 
     def documents(self) -> List[Document]:

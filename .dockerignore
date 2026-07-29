@@ -1,0 +1,24 @@
+# The Rust target dir alone is hundreds of MB — sending it as build context
+# would dominate build time.
+target/
+**/target/
+
+# The frontend deploys to Vercel, not into this image.
+app/
+
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.so
+.git/
+.github/
+.next/
+
+# Build outputs that must be produced inside the image, not copied in.
+dist/
+*.whl
+*.egg-info/

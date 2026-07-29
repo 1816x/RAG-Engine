@@ -14,10 +14,13 @@ Run with:  uvicorn rag_service.app:app --reload
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
-from typing import List, Optional
+import pathlib
+from typing import AsyncIterator, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -25,7 +28,53 @@ from .generation import generate_answer
 from .store import DocumentStore
 from hnsw_rag import get_embedder
 
-app = FastAPI(title="RAG Engine service", version="0.1.0")
+log = logging.getLogger(__name__)
+
+# One in-memory store for the process. The embedder backend is chosen at
+# startup: real model if available, deterministic hashed fallback otherwise.
+_embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
+_store = DocumentStore(embedder=_embedder)
+
+SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def seed_sample_docs() -> int:
+    """Index the bundled sample corpus in-process. Returns documents added.
+
+    The index is in-memory, so a fresh container starts empty. `scripts/seed.py`
+    solves that over HTTP for a running instance, but a hosted deployment has
+    nobody to run it — hence this in-process path for startup.
+    """
+    if not SAMPLE_DOCS.is_dir():
+        log.warning("sample corpus not found at %s; starting with an empty index", SAMPLE_DOCS)
+        return 0
+    added = 0
+    for path in sorted(SAMPLE_DOCS.glob("*.md")):
+        _store.add_document(path.stem.replace("_", " "), path.read_text())
+        added += 1
+    return added
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Optionally seed the sample corpus on boot.
+
+    Off by default so local runs and the test suite keep their existing
+    behavior (seed explicitly via `scripts/seed.py` or a fixture). Deployments
+    turn it on — see `RAG_SEED_ON_STARTUP` in fly.toml. Also guarded on an
+    empty index so it can never double-seed.
+    """
+    if _env_flag("RAG_SEED_ON_STARTUP") and _store.stats()["chunks"] == 0:
+        added = seed_sample_docs()
+        log.info("seeded %d sample document(s) on startup", added)
+    yield
+
+
+app = FastAPI(title="RAG Engine service", version="0.1.0", lifespan=lifespan)
 
 # The Next.js dev server calls this cross-origin.
 app.add_middleware(
@@ -34,11 +83,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# One in-memory store for the process. The embedder backend is chosen at
-# startup: real model if available, deterministic hashed fallback otherwise.
-_embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
-_store = DocumentStore(embedder=_embedder)
 
 
 class DocumentIn(BaseModel):

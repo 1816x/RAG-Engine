@@ -27,6 +27,27 @@ documents → [Python: chunking + embeddings]
 | `service/`  | Python | FastAPI RAG service: chunk → embed → HNSW retrieve → Claude answer with cited sources. Runs keyless in mock mode. |
 | `app/`      | TypeScript | Next.js chat UI: ask questions, see the answer and retrieved sources (cited chunks highlighted). |
 
+## Deploying it
+
+The repo ships everything needed to host the demo: the service runs in a container, the UI deploys to Vercel.
+
+**Backend (Fly.io):**
+
+```sh
+fly launch --no-deploy   # claims an app name, keeps the committed fly.toml
+fly deploy
+```
+
+The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the Rust toolchain, stage two installs only that wheel (it's `abi3`, so it's portable across CPython ≥ 3.9). Final image is ~270 MB and runs as a non-root user. `fly.toml` scales to zero when idle and suspends rather than stops, so the in-memory index survives a resume.
+
+**Frontend (Vercel):** deploy `app/` as its own project. Point it at the backend with `RAG_SERVICE_URL`, or set `DEFAULT_RAG_SERVICE_URL` in `app/app/lib/config.ts` (it's a public URL, not a secret).
+
+**What the hosted demo actually runs — worth being clear about:**
+
+- **No `ANTHROPIC_API_KEY`.** It runs in mock mode: answers are extractive, tagged with a visible `mock` badge. Nothing calls Claude, so there's no key on a public endpoint and no spend to burn. Retrieval — the HNSW index, which is the point of the project — is fully real.
+- **The hashed fallback embedder**, not `sentence-transformers` (which would drag `torch` into the image). That means retrieval matches on *term overlap, not meaning*. Don't mistake the demo for semantic search; install `sentence-transformers` and set `RAG_EMBEDDER=model` for that. `GET /stats` reports which backend is live so you never have to guess.
+- **Cold starts.** Scaled to zero, the first request after an idle period waits a second or two for the machine to wake.
+
 ## Quick start
 
 Each layer runs on its own; you only need the ones you care about.
@@ -120,7 +141,7 @@ This section grows as the project does; each phase documents the trade-offs it m
 |-------|---------|-------|
 | Rust engine | `cargo test` | 23 (unit + seeded recall vs. brute force + doctest) |
 | Python bindings + helpers | `pytest` in `bindings/` | 16 (FFI surface, recall vs. brute force, chunking, embeddings, E2E retrieval) |
-| RAG service | `PYTHONPATH=. pytest` in `service/` | 12 (keyless E2E via FastAPI TestClient + citation parsing) |
+| RAG service | `PYTHONPATH=. pytest` in `service/` | 16 (keyless E2E via FastAPI TestClient, citation parsing, startup seeding) |
 | Next.js app | `npm run build` | type-checked production build |
 
 CI (`.github/workflows/ci.yml`) runs all four on every push, in parallel jobs: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`, the bindings suite, the service suite, and the app build.

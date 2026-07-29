@@ -1,0 +1,47 @@
+# Fly.io config for the RAG service (the Next.js app deploys to Vercel).
+#
+# Deploy:
+#   fly launch --no-deploy    # claims the app name / picks a region, keeps this file
+#   fly deploy
+#
+# The app name below must be globally unique on Fly — `fly launch` will offer to
+# change it if it is taken.
+
+app = "rag-engine-demo"
+primary_region = "iad"   # change to whichever region is nearest you
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # A fresh machine has nobody to run scripts/seed.py, so the service indexes
+  # its bundled sample corpus on startup. Also set in the Dockerfile; kept here
+  # so the behavior is visible in the deploy config.
+  RAG_SEED_ON_STARTUP = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Scale to zero when idle. "suspend" snapshots the machine's memory rather
+  # than killing it, so the in-memory HNSW index survives a resume and wake is
+  # ~1-2s. Startup seeding covers the case where the machine fully stops.
+  # If your flyctl is too old to accept "suspend", use "stop" — the index is
+  # then rebuilt from the sample corpus on each cold start, which is fine.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  # 512MB is ample: the image has no torch, because the service runs the
+  # dependency-free hashed embedder rather than sentence-transformers.
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

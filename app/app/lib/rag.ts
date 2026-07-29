@@ -1,7 +1,9 @@
 // Server-side client for the Python RAG service. Runs only in route handlers,
 // so RAG_SERVICE_URL and any secrets stay off the client.
 
-const SERVICE_URL = process.env.RAG_SERVICE_URL ?? "http://localhost:8000";
+import { DEFAULT_RAG_SERVICE_URL } from "./config";
+
+const SERVICE_URL = process.env.RAG_SERVICE_URL ?? DEFAULT_RAG_SERVICE_URL;
 
 export interface Source {
   chunk_id: number;
