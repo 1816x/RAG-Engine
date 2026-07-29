@@ -16,11 +16,25 @@ pub enum Metric {
     Cosine,
 }
 
+// Both hot loops below accumulate into 8 independent lanes over
+// `chunks_exact(8)`. Scalar float addition is not associative, so LLVM will
+// not vectorize a single-accumulator reduction on its own; spelling out the
+// lanes lets it emit SIMD adds while keeping the code portable and safe.
+
 pub(crate) fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    let mut sum = 0.0f32;
-    for i in 0..a.len() {
-        let d = a[i] - b[i];
+    let mut lanes = [0.0f32; 8];
+    let mut ca = a.chunks_exact(8);
+    let mut cb = b.chunks_exact(8);
+    for (xs, ys) in ca.by_ref().zip(cb.by_ref()) {
+        for i in 0..8 {
+            let d = xs[i] - ys[i];
+            lanes[i] += d * d;
+        }
+    }
+    let mut sum: f32 = lanes.iter().sum();
+    for (x, y) in ca.remainder().iter().zip(cb.remainder()) {
+        let d = x - y;
         sum += d * d;
     }
     sum
@@ -28,9 +42,17 @@ pub(crate) fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
 
 pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    let mut sum = 0.0f32;
-    for i in 0..a.len() {
-        sum += a[i] * b[i];
+    let mut lanes = [0.0f32; 8];
+    let mut ca = a.chunks_exact(8);
+    let mut cb = b.chunks_exact(8);
+    for (xs, ys) in ca.by_ref().zip(cb.by_ref()) {
+        for i in 0..8 {
+            lanes[i] += xs[i] * ys[i];
+        }
+    }
+    let mut sum: f32 = lanes.iter().sum();
+    for (x, y) in ca.remainder().iter().zip(cb.remainder()) {
+        sum += x * y;
     }
     sum
 }

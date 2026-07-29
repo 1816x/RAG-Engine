@@ -6,9 +6,16 @@
 //! decaying probability. A query greedily descends from the sparse top layers
 //! (long hops across the space) into layer 0, where a beam search of width
 //! `ef` collects the nearest neighbors.
+//!
+//! Performance notes (measured, see README benchmarks):
+//! - Vectors live in one contiguous `Vec<f32>` (row stride = dim) rather than
+//!   `Vec<Vec<f32>>` — distance evaluation is the hot loop and pointer
+//!   chasing there dominates everything else.
+//! - The visited set is a reusable bitset, not a `HashSet` — clearing it is
+//!   one small memset instead of a rehash, and lookups are branch + mask.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::BinaryHeap;
 
 use crate::distance::{self, Metric};
 use crate::rng::SplitMix64;
@@ -53,7 +60,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::DimensionMismatch { expected, got } => {
-                write!(f, "dimension mismatch: index holds {expected}-d vectors, got {got}-d")
+                write!(
+                    f,
+                    "dimension mismatch: index holds {expected}-d vectors, got {got}-d"
+                )
             }
         }
     }
@@ -79,12 +89,73 @@ impl Ord for OrdF32 {
     }
 }
 
+/// Contiguous vector storage: row `id` lives at `data[id * dim .. (id+1) * dim]`.
+struct VectorStore {
+    dim: usize,
+    metric: Metric,
+    data: Vec<f32>,
+}
+
+impl VectorStore {
+    fn len(&self) -> usize {
+        self.data.len() / self.dim
+    }
+
+    fn get(&self, id: u32) -> &[f32] {
+        let start = id as usize * self.dim;
+        &self.data[start..start + self.dim]
+    }
+
+    fn push(&mut self, v: &[f32]) {
+        debug_assert_eq!(v.len(), self.dim);
+        self.data.extend_from_slice(v);
+    }
+
+    /// Comparison distance: squared L2 for Euclidean (monotonic in true L2),
+    /// `1 - dot` for Cosine (vectors are pre-normalized).
+    fn dist(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.metric {
+            Metric::Euclidean => distance::l2_sq(a, b),
+            Metric::Cosine => 1.0 - distance::dot(a, b),
+        }
+    }
+
+    fn dist_to(&self, q: &[f32], id: u32) -> f32 {
+        self.dist(q, self.get(id))
+    }
+}
+
+/// Reusable visited-bitset. `reset` is one memset of n/8 bytes; the insert
+/// path keeps one instance alive across calls, `search` uses a per-call one
+/// so it can stay `&self` (and thus be called concurrently).
+struct Visited {
+    bits: Vec<u64>,
+}
+
+impl Visited {
+    fn new() -> Self {
+        Self { bits: Vec::new() }
+    }
+
+    fn reset(&mut self, n: usize) {
+        let words = n.div_ceil(64);
+        self.bits.clear();
+        self.bits.resize(words, 0);
+    }
+
+    /// Mark `id` visited; returns true if it was not visited before.
+    fn insert(&mut self, id: u32) -> bool {
+        let word = (id / 64) as usize;
+        let mask = 1u64 << (id % 64);
+        let seen = self.bits[word] & mask != 0;
+        self.bits[word] |= mask;
+        !seen
+    }
+}
+
 pub struct Hnsw {
     params: HnswParams,
-    metric: Metric,
-    dim: usize,
-    /// Vector data, indexed by id (ids are dense, assigned in insert order).
-    vectors: Vec<Vec<f32>>,
+    store: VectorStore,
     /// `links[id][level]` = neighbor ids of `id` at that level. A node's top
     /// level is `links[id].len() - 1`.
     links: Vec<Vec<Vec<u32>>>,
@@ -96,6 +167,8 @@ pub struct Hnsw {
     /// `1 / ln(m)` — normalization for the level distribution.
     level_mult: f64,
     rng: SplitMix64,
+    /// Scratch for the `&mut self` insert path.
+    visited: Visited,
 }
 
 impl Hnsw {
@@ -108,57 +181,64 @@ impl Hnsw {
         assert!(params.m >= 2, "m must be >= 2");
         assert!(params.ef_construction > 0, "ef_construction must be > 0");
         Self {
-            metric,
-            dim,
-            vectors: Vec::new(),
+            store: VectorStore {
+                dim,
+                metric,
+                data: Vec::new(),
+            },
             links: Vec::new(),
             entry: None,
             top_level: 0,
             m_max0: params.m * 2,
             level_mult: 1.0 / (params.m as f64).ln(),
             rng: SplitMix64::new(params.seed),
+            visited: Visited::new(),
             params,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.vectors.len()
+        self.store.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.vectors.is_empty()
+        self.store.data.is_empty()
     }
 
     pub fn dim(&self) -> usize {
-        self.dim
+        self.store.dim
     }
 
     pub fn metric(&self) -> Metric {
-        self.metric
+        self.store.metric
     }
 
     /// The stored vector for `id` (normalized if the metric is Cosine).
     pub fn vector(&self, id: u32) -> Option<&[f32]> {
-        self.vectors.get(id as usize).map(|v| v.as_slice())
+        if (id as usize) < self.store.len() {
+            Some(self.store.get(id))
+        } else {
+            None
+        }
     }
 
     /// Insert a vector, returning its id. Ids are dense: 0, 1, 2, …
     pub fn insert(&mut self, mut vector: Vec<f32>) -> Result<u32, Error> {
-        if vector.len() != self.dim {
+        if vector.len() != self.store.dim {
             return Err(Error::DimensionMismatch {
-                expected: self.dim,
+                expected: self.store.dim,
                 got: vector.len(),
             });
         }
-        if self.metric == Metric::Cosine {
+        if self.store.metric == Metric::Cosine {
             distance::normalize(&mut vector);
         }
 
-        let id = self.vectors.len() as u32;
+        let id = self.store.len() as u32;
         let level = self.random_level();
-        let q = vector.clone();
-        self.vectors.push(vector);
+        self.store.push(&vector);
         self.links.push(vec![Vec::new(); level + 1]);
+        let q = vector; // owned copy doubles as the query — no re-clone
 
         let Some(entry) = self.entry else {
             self.entry = Some(id);
@@ -166,25 +246,34 @@ impl Hnsw {
             return Ok(id);
         };
 
-        let mut ep = vec![(self.dist_to(&q, entry), entry)];
+        let mut ep = vec![(self.store.dist_to(&q, entry), entry)];
 
         // Layers above the new node's level: pure greedy descent (beam of 1).
         for lc in (level + 1..=self.top_level).rev() {
-            ep = self.search_layer(&q, ep, 1, lc);
+            ep = search_layer(&self.store, &self.links, &mut self.visited, &q, ep, 1, lc);
             ep.truncate(1);
         }
 
         // Layers the new node belongs to: beam-search candidates, pick a
         // diverse subset, and wire links both ways.
         for lc in (0..=level.min(self.top_level)).rev() {
-            let found = self.search_layer(&q, ep, self.params.ef_construction, lc);
-            let selected = self.select_neighbors(&found, self.params.m);
+            let found = search_layer(
+                &self.store,
+                &self.links,
+                &mut self.visited,
+                &q,
+                ep,
+                self.params.ef_construction,
+                lc,
+            );
+            let selected = select_neighbors(&self.store, &found, self.params.m);
             let max_links = if lc == 0 { self.m_max0 } else { self.params.m };
             for &(_, e) in &selected {
                 self.links[id as usize][lc].push(e);
-                self.links[e as usize][lc].push(id);
-                if self.links[e as usize][lc].len() > max_links {
-                    self.prune_links(e, lc, max_links);
+                let e_links = &mut self.links[e as usize][lc];
+                e_links.push(id);
+                if e_links.len() > max_links {
+                    prune_links(&self.store, e_links, e, max_links);
                 }
             }
             ep = found;
@@ -200,10 +289,15 @@ impl Hnsw {
     /// Return the `k` approximate nearest neighbors of `query`, closest
     /// first. `ef_search` is the layer-0 beam width; it is clamped to at
     /// least `k`. Larger values improve recall at the cost of latency.
-    pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Result<Vec<Neighbor>, Error> {
-        if query.len() != self.dim {
+    pub fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Result<Vec<Neighbor>, Error> {
+        if query.len() != self.store.dim {
             return Err(Error::DimensionMismatch {
-                expected: self.dim,
+                expected: self.store.dim,
                 got: query.len(),
             });
         }
@@ -214,23 +308,24 @@ impl Hnsw {
             return Ok(Vec::new());
         }
 
-        let q: Vec<f32>;
-        let q = if self.metric == Metric::Cosine {
+        let normalized;
+        let q: &[f32] = if self.store.metric == Metric::Cosine {
             let mut v = query.to_vec();
             distance::normalize(&mut v);
-            q = v;
-            &q[..]
+            normalized = v;
+            &normalized
         } else {
             query
         };
 
         let ef = ef_search.max(k);
-        let mut ep = vec![(self.dist_to(q, entry), entry)];
+        let mut visited = Visited::new();
+        let mut ep = vec![(self.store.dist_to(q, entry), entry)];
         for lc in (1..=self.top_level).rev() {
-            ep = self.search_layer(q, ep, 1, lc);
+            ep = search_layer(&self.store, &self.links, &mut visited, q, ep, 1, lc);
             ep.truncate(1);
         }
-        let found = self.search_layer(q, ep, ef, 0);
+        let found = search_layer(&self.store, &self.links, &mut visited, q, ep, ef, 0);
         Ok(found
             .into_iter()
             .take(k)
@@ -241,21 +336,9 @@ impl Hnsw {
             .collect())
     }
 
-    /// Comparison distance (squared L2 / `1 - dot`) — see `distance` module.
-    fn dist(&self, a: &[f32], b: &[f32]) -> f32 {
-        match self.metric {
-            Metric::Euclidean => distance::l2_sq(a, b),
-            Metric::Cosine => 1.0 - distance::dot(a, b),
-        }
-    }
-
-    fn dist_to(&self, q: &[f32], id: u32) -> f32 {
-        self.dist(q, &self.vectors[id as usize])
-    }
-
     /// Convert a comparison distance to the user-facing one.
     fn report(&self, d: f32) -> f32 {
-        match self.metric {
+        match self.store.metric {
             Metric::Euclidean => d.max(0.0).sqrt(),
             Metric::Cosine => d,
         }
@@ -266,112 +349,126 @@ impl Hnsw {
         let r = self.rng.next_f64().max(f64::MIN_POSITIVE);
         (-r.ln() * self.level_mult) as usize
     }
+}
 
-    /// Algorithm 2 from the paper: beam search within one layer. Takes entry
-    /// points as `(comparison_distance, id)` pairs, returns up to `ef`
-    /// closest nodes, sorted ascending by distance.
-    fn search_layer(
-        &self,
-        q: &[f32],
-        entry_points: Vec<(f32, u32)>,
-        ef: usize,
-        level: usize,
-    ) -> Vec<(f32, u32)> {
-        let mut visited: HashSet<u32> = entry_points.iter().map(|&(_, id)| id).collect();
-        // Min-heap of nodes still to expand.
-        let mut candidates: BinaryHeap<Reverse<(OrdF32, u32)>> = entry_points
-            .iter()
-            .map(|&(d, id)| Reverse((OrdF32(d), id)))
-            .collect();
-        // Max-heap of current best: worst kept result sits on top.
-        let mut results: BinaryHeap<(OrdF32, u32)> = entry_points
-            .into_iter()
-            .map(|(d, id)| (OrdF32(d), id))
-            .collect();
-        while results.len() > ef {
-            results.pop();
-        }
-
-        while let Some(Reverse((OrdF32(c_dist), c))) = candidates.pop() {
-            let worst = results.peek().map(|&(OrdF32(d), _)| d).unwrap_or(f32::INFINITY);
-            if c_dist > worst && results.len() >= ef {
-                break; // the closest unexpanded node can't improve results
-            }
-            for &nb in &self.links[c as usize][level] {
-                if !visited.insert(nb) {
-                    continue;
-                }
-                let d = self.dist_to(q, nb);
-                let worst = results.peek().map(|&(OrdF32(w), _)| w).unwrap_or(f32::INFINITY);
-                if results.len() < ef || d < worst {
-                    candidates.push(Reverse((OrdF32(d), nb)));
-                    results.push((OrdF32(d), nb));
-                    if results.len() > ef {
-                        results.pop();
-                    }
-                }
-            }
-        }
-
-        let mut out: Vec<(f32, u32)> = results
-            .into_iter()
-            .map(|(OrdF32(d), id)| (d, id))
-            .collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out
+/// Algorithm 2 from the paper: beam search within one layer. Takes entry
+/// points as `(comparison_distance, id)` pairs, returns up to `ef` closest
+/// nodes, sorted ascending by distance.
+///
+/// Free function over explicit fields (rather than `&self`) so the insert
+/// path can hold disjoint borrows: the store is read while links are being
+/// rewired.
+fn search_layer(
+    store: &VectorStore,
+    links: &[Vec<Vec<u32>>],
+    visited: &mut Visited,
+    q: &[f32],
+    entry_points: Vec<(f32, u32)>,
+    ef: usize,
+    level: usize,
+) -> Vec<(f32, u32)> {
+    visited.reset(store.len());
+    for &(_, id) in &entry_points {
+        visited.insert(id);
+    }
+    // Min-heap of nodes still to expand.
+    let mut candidates: BinaryHeap<Reverse<(OrdF32, u32)>> = entry_points
+        .iter()
+        .map(|&(d, id)| Reverse((OrdF32(d), id)))
+        .collect();
+    // Max-heap of current best: worst kept result sits on top.
+    let mut results: BinaryHeap<(OrdF32, u32)> = entry_points
+        .into_iter()
+        .map(|(d, id)| (OrdF32(d), id))
+        .collect();
+    while results.len() > ef {
+        results.pop();
     }
 
-    /// Algorithm 4 from the paper (the diversity heuristic): walk candidates
-    /// closest-first and keep one only if it is closer to the query than to
-    /// every already-kept neighbor. This spreads links across directions
-    /// instead of clustering them, which is what keeps the graph navigable.
-    /// Pruned candidates backfill remaining slots (keepPrunedConnections).
-    fn select_neighbors(&self, candidates: &[(f32, u32)], m: usize) -> Vec<(f32, u32)> {
-        if candidates.len() <= m {
-            return candidates.to_vec();
+    while let Some(Reverse((OrdF32(c_dist), c))) = candidates.pop() {
+        let worst = results
+            .peek()
+            .map(|&(OrdF32(d), _)| d)
+            .unwrap_or(f32::INFINITY);
+        if c_dist > worst && results.len() >= ef {
+            break; // the closest unexpanded node can't improve results
         }
-        let mut selected: Vec<(f32, u32)> = Vec::with_capacity(m);
-        let mut pruned: Vec<(f32, u32)> = Vec::new();
-        for &(d, e) in candidates {
-            if selected.len() >= m {
-                break;
+        for &nb in &links[c as usize][level] {
+            if !visited.insert(nb) {
+                continue;
             }
-            let ev = &self.vectors[e as usize];
-            let diverse = selected
-                .iter()
-                .all(|&(_, s)| self.dist(ev, &self.vectors[s as usize]) >= d);
-            if diverse {
-                selected.push((d, e));
-            } else {
-                pruned.push((d, e));
+            let d = store.dist_to(q, nb);
+            let worst = results
+                .peek()
+                .map(|&(OrdF32(w), _)| w)
+                .unwrap_or(f32::INFINITY);
+            if results.len() < ef || d < worst {
+                candidates.push(Reverse((OrdF32(d), nb)));
+                results.push((OrdF32(d), nb));
+                if results.len() > ef {
+                    results.pop();
+                }
             }
         }
-        for &(d, e) in &pruned {
-            if selected.len() >= m {
-                break;
-            }
+    }
+
+    let mut out: Vec<(f32, u32)> = results.into_iter().map(|(OrdF32(d), id)| (d, id)).collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// Algorithm 4 from the paper (the diversity heuristic): walk candidates
+/// closest-first and keep one only if it is closer to the query than to
+/// every already-kept neighbor. This spreads links across directions
+/// instead of clustering them, which is what keeps the graph navigable.
+/// Pruned candidates backfill remaining slots (keepPrunedConnections).
+fn select_neighbors(store: &VectorStore, candidates: &[(f32, u32)], m: usize) -> Vec<(f32, u32)> {
+    if candidates.len() <= m {
+        return candidates.to_vec();
+    }
+    let mut selected: Vec<(f32, u32)> = Vec::with_capacity(m);
+    let mut pruned: Vec<(f32, u32)> = Vec::new();
+    for &(d, e) in candidates {
+        if selected.len() >= m {
+            break;
+        }
+        let ev = store.get(e);
+        let diverse = selected
+            .iter()
+            .all(|&(_, s)| store.dist(ev, store.get(s)) >= d);
+        if diverse {
             selected.push((d, e));
+        } else {
+            pruned.push((d, e));
         }
-        selected
     }
+    for &(d, e) in &pruned {
+        if selected.len() >= m {
+            break;
+        }
+        selected.push((d, e));
+    }
+    selected
+}
 
-    /// Re-select `node`'s links at `level` down to `max_links`, using the
-    /// same diversity heuristic as insertion.
-    fn prune_links(&mut self, node: u32, level: usize, max_links: usize) {
-        let nv = self.vectors[node as usize].clone();
-        let mut with_dist: Vec<(f32, u32)> = self.links[node as usize][level]
-            .iter()
-            .map(|&n| (self.dist(&nv, &self.vectors[n as usize]), n))
-            .collect();
-        with_dist.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let selected = self.select_neighbors(&with_dist, max_links);
-        self.links[node as usize][level] = selected.into_iter().map(|(_, id)| id).collect();
-    }
+/// Re-select `node`'s link list down to `max_links`, using the same
+/// diversity heuristic as insertion.
+fn prune_links(store: &VectorStore, list: &mut Vec<u32>, node: u32, max_links: usize) {
+    let nv = store.get(node);
+    let mut with_dist: Vec<(f32, u32)> = list
+        .iter()
+        .map(|&n| (store.dist(nv, store.get(n)), n))
+        .collect();
+    with_dist.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let selected = select_neighbors(store, &with_dist, max_links);
+    list.clear();
+    list.extend(selected.into_iter().map(|(_, id)| id));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn index_with(vectors: &[Vec<f32>], metric: Metric) -> Hnsw {
         let mut idx = Hnsw::new(vectors[0].len(), metric, HnswParams::default());
@@ -393,7 +490,10 @@ mod tests {
         let mut idx = Hnsw::new(4, Metric::Euclidean, HnswParams::default());
         assert_eq!(
             idx.insert(vec![1.0, 2.0]),
-            Err(Error::DimensionMismatch { expected: 4, got: 2 })
+            Err(Error::DimensionMismatch {
+                expected: 4,
+                got: 2
+            })
         );
         assert!(idx.search(&[0.0; 3], 1, 10).is_err());
     }
@@ -466,8 +566,21 @@ mod tests {
     }
 
     #[test]
+    fn stored_vectors_are_retrievable_by_id() {
+        let vectors = vec![vec![1.0f32, 2.0], vec![3.0, 4.0]];
+        let idx = index_with(&vectors, Metric::Euclidean);
+        assert_eq!(idx.vector(0), Some(&[1.0f32, 2.0][..]));
+        assert_eq!(idx.vector(1), Some(&[3.0f32, 4.0][..]));
+        assert_eq!(idx.vector(2), None);
+    }
+
+    #[test]
     fn link_counts_respect_caps() {
-        let params = HnswParams { m: 4, ef_construction: 32, seed: 1 };
+        let params = HnswParams {
+            m: 4,
+            ef_construction: 32,
+            seed: 1,
+        };
         let mut idx = Hnsw::new(8, Metric::Euclidean, params);
         let mut rng = crate::rng::SplitMix64::new(9);
         for _ in 0..500 {

@@ -85,7 +85,10 @@ fn higher_ef_does_not_hurt_recall() {
     let r_high = measure_recall(&index, &vectors, &queries, 10, 200, Metric::Euclidean);
     println!("recall@10: ef=10 -> {r_low:.4}, ef=200 -> {r_high:.4}");
     assert!(r_high >= r_low);
-    assert!(r_high >= 0.99, "ef=200 on 1k vectors should be near-exact: {r_high:.4}");
+    assert!(
+        r_high >= 0.99,
+        "ef=200 on 1k vectors should be near-exact: {r_high:.4}"
+    );
 }
 
 #[test]
