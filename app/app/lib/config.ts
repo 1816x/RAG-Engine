@@ -5,6 +5,6 @@
 // RAG_SERVICE_URL environment variable for local development or a different
 // backend.
 //
-// Replace this with the deployed Fly.io URL (https://<app>.fly.dev) when the
-// backend goes live.
-export const DEFAULT_RAG_SERVICE_URL = "http://localhost:8000";
+// For local development against a service on port 8000:
+//   RAG_SERVICE_URL=http://localhost:8000 npm run dev
+export const DEFAULT_RAG_SERVICE_URL = "https://rag-engine-demo.fly.dev";
