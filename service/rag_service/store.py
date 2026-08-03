@@ -51,6 +51,7 @@ class RetrievedChunk:
 class DocumentStore:
     embedder: Embedder
     metric: str = "cosine"
+    min_score: Optional[float] = None
     m: int = 16
     ef_construction: int = 200
     seed: int = 0x5EED
@@ -121,6 +122,10 @@ class DocumentStore:
             # Cosine distance is 1 - similarity; report similarity so higher
             # is more relevant, which is what a reader expects from a score.
             score = 1.0 - distance if self.metric == "cosine" else -distance
+            if self.min_score is not None and score < self.min_score:
+                # Hits are closest-first, so their relevance scores only
+                # decrease. Weak nearest neighbors are not useful grounding.
+                break
             out.append(
                 RetrievedChunk(
                     id=sc.id,
@@ -140,6 +145,7 @@ class DocumentStore:
                 "chunks": len(self._chunks),
                 "dim": self.dim,
                 "metric": self.metric,
+                "min_score": self.min_score,
                 # Which embedding backend is actually live. Worth surfacing:
                 # HashedEmbedder matches on term overlap, not meaning, so a
                 # reader should not mistake it for semantic search.

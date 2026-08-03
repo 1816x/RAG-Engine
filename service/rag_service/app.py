@@ -33,7 +33,10 @@ log = logging.getLogger(__name__)
 # One in-memory store for the process. The embedder backend is chosen at
 # startup: real model if available, deterministic hashed fallback otherwise.
 _embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
-_store = DocumentStore(embedder=_embedder)
+_store = DocumentStore(
+    embedder=_embedder,
+    min_score=float(os.environ.get("RAG_MIN_SCORE", "0.09")),
+)
 
 SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"
 

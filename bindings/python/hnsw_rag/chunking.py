@@ -32,9 +32,19 @@ def _split_paragraphs(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _split_long_paragraph(words: list[str], max_words: int, overlap: int) -> list[list[str]]:
-    step = max(1, max_words - overlap)
-    return [words[i : i + max_words] for i in range(0, len(words), step)]
+def _split_long_paragraph(
+    words: list[str], max_words: int, overlap: int
+) -> list[list[str]]:
+    pieces: list[list[str]] = []
+    start = 0
+    step = max_words - overlap
+    while start < len(words):
+        end = min(start + max_words, len(words))
+        pieces.append(words[start:end])
+        if end == len(words):
+            break
+        start += step
+    return pieces
 
 
 def chunk_text(
@@ -56,6 +66,10 @@ def chunk_text(
     Returns:
         Chunks in document order, each tagged with its running index.
     """
+    if max_words <= 0:
+        raise ValueError("max_words must be greater than zero")
+    if overlap < 0:
+        raise ValueError("overlap must be non-negative")
     if overlap >= max_words:
         raise ValueError("overlap must be smaller than max_words")
 
@@ -76,8 +90,10 @@ def chunk_text(
                 chunks.append(" ".join(piece))
             continue
         if current and len(current) + len(words) > max_words:
-            # Carry an overlap tail from the chunk we're closing.
-            tail = current[-overlap:] if overlap else []
+            # Carry as much overlap as fits beside the next paragraph. A
+            # full-size paragraph leaves no room for an overlap tail.
+            tail_size = min(overlap, max_words - len(words))
+            tail = current[-tail_size:] if tail_size else []
             flush()
             current.extend(tail)
         current.extend(words)

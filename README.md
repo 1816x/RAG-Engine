@@ -55,7 +55,7 @@ Each layer runs on its own; you only need the ones you care about.
 **1. The Rust engine (no Python, no Node):**
 
 ```sh
-cargo test                              # 22 tests, incl. seeded recall vs. brute force
+cargo test                              # 24 tests, incl. seeded recall vs. brute force
 cargo run --release --example bench     # the benchmark table below
 ```
 
@@ -66,7 +66,7 @@ cd bindings
 python3 -m venv .venv && . .venv/bin/activate
 pip install maturin pytest
 maturin develop --release               # builds the Rust extension into the venv
-pytest tests/                           # 16 tests through the FFI boundary
+pytest tests/                           # 21 tests through the FFI boundary
 ```
 
 ```python
@@ -90,6 +90,12 @@ RAG_SERVICE_URL=http://localhost:8000 npm run dev   # http://localhost:3000
 ```
 
 Set `ANTHROPIC_API_KEY` before starting the service to get real Claude-generated answers instead of the extractive mock. The retrieval layer (HNSW search + cited sources) is identical either way.
+
+Retrieval drops chunks whose relevance score is below `RAG_MIN_SCORE`
+(default: `0.09`). If no chunk clears the threshold, the service returns no
+sources and says the indexed documents do not address the question. Tune the
+threshold for a different embedding model or set it to `-1` to preserve every
+cosine-search hit.
 
 ## Roadmap
 
@@ -139,9 +145,9 @@ This section grows as the project does; each phase documents the trade-offs it m
 
 | Layer | Command | Count |
 |-------|---------|-------|
-| Rust engine | `cargo test` | 23 (unit + seeded recall vs. brute force + doctest) |
-| Python bindings + helpers | `pytest` in `bindings/` | 16 (FFI surface, recall vs. brute force, chunking, embeddings, E2E retrieval) |
-| RAG service | `PYTHONPATH=. pytest` in `service/` | 16 (keyless E2E via FastAPI TestClient, citation parsing, startup seeding) |
+| Rust engine | `cargo test` | 24 (unit + seeded recall vs. brute force + doctest) |
+| Python bindings + helpers | `pytest` in `bindings/` | 21 (FFI surface, atomic batches, validation, chunking, embeddings, E2E retrieval) |
+| RAG service | `PYTHONPATH=. pytest` in `service/` | 17 (keyless E2E, relevance filtering, citation parsing, startup seeding) |
 | Next.js app | `npm run build` | type-checked production build |
 
 CI (`.github/workflows/ci.yml`) runs all four on every push, in parallel jobs: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`, the bindings suite, the service suite, and the app build.

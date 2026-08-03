@@ -75,6 +75,23 @@ impl Hnsw {
 
     /// Insert many vectors; returns their ids.
     fn insert_batch(&mut self, vectors: Vec<Vec<f32>>) -> PyResult<Vec<u32>> {
+        // Validate the complete batch before mutating the index. Otherwise a
+        // bad vector halfway through would leave earlier vectors inserted even
+        // though Python receives an exception for the overall operation.
+        for (batch_index, vector) in vectors.iter().enumerate() {
+            if vector.len() != self.inner.dim() {
+                return Err(PyValueError::new_err(format!(
+                    "batch vector {batch_index}: dimension mismatch: index holds {}-d vectors, got {}-d",
+                    self.inner.dim(),
+                    vector.len()
+                )));
+            }
+            if let Some(position) = vector.iter().position(|value| !value.is_finite()) {
+                return Err(PyValueError::new_err(format!(
+                    "batch vector {batch_index} contains a non-finite value at position {position}"
+                )));
+            }
+        }
         vectors.into_iter().map(|v| self.insert(v)).collect()
     }
 

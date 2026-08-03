@@ -54,6 +54,7 @@ pub struct Neighbor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     DimensionMismatch { expected: usize, got: usize },
+    NonFiniteValue { position: usize },
 }
 
 impl std::fmt::Display for Error {
@@ -63,6 +64,12 @@ impl std::fmt::Display for Error {
                 write!(
                     f,
                     "dimension mismatch: index holds {expected}-d vectors, got {got}-d"
+                )
+            }
+            Error::NonFiniteValue { position } => {
+                write!(
+                    f,
+                    "vector contains a non-finite value at position {position}"
                 )
             }
         }
@@ -230,6 +237,9 @@ impl Hnsw {
                 got: vector.len(),
             });
         }
+        if let Some(position) = vector.iter().position(|value| !value.is_finite()) {
+            return Err(Error::NonFiniteValue { position });
+        }
         if self.store.metric == Metric::Cosine {
             distance::normalize(&mut vector);
         }
@@ -300,6 +310,9 @@ impl Hnsw {
                 expected: self.store.dim,
                 got: query.len(),
             });
+        }
+        if let Some(position) = query.iter().position(|value| !value.is_finite()) {
+            return Err(Error::NonFiniteValue { position });
         }
         let Some(entry) = self.entry else {
             return Ok(Vec::new());
@@ -496,6 +509,23 @@ mod tests {
             })
         );
         assert!(idx.search(&[0.0; 3], 1, 10).is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_values_without_mutation() {
+        let mut idx = Hnsw::new(2, Metric::Cosine, HnswParams::default());
+        assert_eq!(
+            idx.insert(vec![f32::NAN, 0.0]),
+            Err(Error::NonFiniteValue { position: 0 })
+        );
+        assert!(idx.is_empty());
+
+        idx.insert(vec![1.0, 0.0]).unwrap();
+        assert_eq!(
+            idx.search(&[0.0, f32::INFINITY], 1, 10),
+            Err(Error::NonFiniteValue { position: 1 })
+        );
+        assert_eq!(idx.len(), 1);
     }
 
     #[test]

@@ -58,6 +58,28 @@ def test_dimension_mismatch_raises():
         index.search([1.0, 2.0], k=1)
 
 
+def test_non_finite_values_are_rejected():
+    index = Hnsw(dim=2)
+    with pytest.raises(ValueError, match="non-finite"):
+        index.insert([float("nan"), 0.0])
+    with pytest.raises(ValueError, match="non-finite"):
+        index.search([0.0, float("inf")], k=1)
+
+
+def test_insert_batch_is_atomic_on_dimension_error():
+    index = Hnsw(dim=2)
+    with pytest.raises(ValueError, match="batch vector 1.*dimension mismatch"):
+        index.insert_batch([[1.0, 0.0], [1.0]])
+    assert len(index) == 0
+
+
+def test_insert_batch_is_atomic_on_non_finite_value():
+    index = Hnsw(dim=2)
+    with pytest.raises(ValueError, match="batch vector 1.*non-finite"):
+        index.insert_batch([[1.0, 0.0], [float("inf"), 1.0]])
+    assert len(index) == 0
+
+
 def test_basic_roundtrip():
     index = Hnsw(dim=3, metric="euclidean")
     ids = index.insert_batch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 5.0, 0.0]])
