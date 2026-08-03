@@ -54,6 +54,7 @@ pub struct Neighbor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     DimensionMismatch { expected: usize, got: usize },
+    NonFiniteValue { position: usize },
 }
 
 impl std::fmt::Display for Error {
@@ -63,6 +64,12 @@ impl std::fmt::Display for Error {
                 write!(
                     f,
                     "dimension mismatch: index holds {expected}-d vectors, got {got}-d"
+                )
+            }
+            Error::NonFiniteValue { position } => {
+                write!(
+                    f,
+                    "vector contains a non-finite value at position {position}"
                 )
             }
         }
@@ -230,6 +237,9 @@ impl Hnsw {
                 got: vector.len(),
             });
         }
+        if let Some(position) = vector.iter().position(|value| !value.is_finite()) {
+            return Err(Error::NonFiniteValue { position });
+        }
         if self.store.metric == Metric::Cosine {
             distance::normalize(&mut vector);
         }
@@ -300,6 +310,9 @@ impl Hnsw {
                 expected: self.store.dim,
                 got: query.len(),
             });
+        }
+        if let Some(position) = query.iter().position(|value| !value.is_finite()) {
+            return Err(Error::NonFiniteValue { position });
         }
         let Some(entry) = self.entry else {
             return Ok(Vec::new());
