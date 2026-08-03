@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 _embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
 _store = DocumentStore(
     embedder=_embedder,
-    min_score=float(os.environ.get("RAG_MIN_SCORE", "0.15")),
+    min_score=float(os.environ.get("RAG_MIN_SCORE", "0.09")),
 )
 
 SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"

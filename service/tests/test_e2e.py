@@ -36,6 +36,7 @@ def test_stats_after_seed(client):
     assert stats["documents"] == 3
     assert stats["chunks"] >= 3
     assert stats["metric"] == "cosine"
+    assert stats["min_score"] == pytest.approx(0.09)
 
 
 def test_documents_listed(client):
@@ -71,10 +72,34 @@ def test_query_retrieves_relevant_document(client, question, expected_doc):
     assert body["answer"]
 
 
-def test_unrelated_question_still_responds_cleanly(client):
-    # An off-topic query returns whatever is nearest; the contract is only that
-    # the endpoint responds cleanly with a well-formed body.
+def test_unrelated_question_returns_no_sources(client):
     resp = client.post("/query", json={"question": "how do I prune roses", "k": 2})
     assert resp.status_code == 200
     body = resp.json()
-    assert "answer" in body and "sources" in body
+    assert body["sources"] == []
+    assert body["model"] == "mock"
+    assert body["answer"] == (
+        "I don't have any indexed documents that address that question."
+    )
+
+
+def test_store_filters_weak_matches_and_keeps_relevant_ones():
+    from rag_service.store import DocumentStore
+
+    class OrthogonalEmbedder:
+        dim = 2
+
+        def embed(self, texts):
+            return [
+                [1.0, 0.0] if text in {"known", "known query"} else [0.0, 1.0]
+                for text in texts
+            ]
+
+    store = DocumentStore(embedder=OrthogonalEmbedder(), min_score=0.15)
+    store.add_document("known document", "known", max_words=10, overlap=0)
+
+    assert store.retrieve("unrelated", k=1) == []
+    relevant = store.retrieve("known query", k=1)
+    assert len(relevant) == 1
+    assert relevant[0].doc_title == "known document"
+    assert relevant[0].score == pytest.approx(1.0)

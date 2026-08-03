@@ -41,6 +41,25 @@ def test_chunk_splits_on_paragraphs():
 def test_chunk_overlap_validation():
     with pytest.raises(ValueError):
         chunk_text("x y z", max_words=10, overlap=10)
+    with pytest.raises(ValueError, match="greater than zero"):
+        chunk_text("x y z", max_words=0, overlap=0)
+    with pytest.raises(ValueError, match="non-negative"):
+        chunk_text("x y z", max_words=10, overlap=-1)
+
+
+def test_paragraph_overlap_never_exceeds_word_budget():
+    first = " ".join(f"first{i}" for i in range(100))
+    second = " ".join(f"second{i}" for i in range(100))
+    chunks = chunk_text(f"{first}\n\n{second}", max_words=100, overlap=20)
+    assert [len(chunk.text.split()) for chunk in chunks] == [100, 100]
+
+
+def test_long_paragraph_has_no_redundant_final_window():
+    words = " ".join(f"w{i}" for i in range(500))
+    chunks = chunk_text(words, max_words=100, overlap=20)
+    assert len(chunks) == 6
+    assert chunks[-1].text.split()[0] == "w400"
+    assert chunks[-1].text.split()[-1] == "w499"
 
 
 def test_hashed_embedder_is_deterministic_and_normalized():

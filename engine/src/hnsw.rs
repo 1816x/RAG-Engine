@@ -512,6 +512,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_finite_values_without_mutation() {
+        let mut idx = Hnsw::new(2, Metric::Cosine, HnswParams::default());
+        assert_eq!(
+            idx.insert(vec![f32::NAN, 0.0]),
+            Err(Error::NonFiniteValue { position: 0 })
+        );
+        assert!(idx.is_empty());
+
+        idx.insert(vec![1.0, 0.0]).unwrap();
+        assert_eq!(
+            idx.search(&[0.0, f32::INFINITY], 1, 10),
+            Err(Error::NonFiniteValue { position: 1 })
+        );
+        assert_eq!(idx.len(), 1);
+    }
+
+    #[test]
     fn finds_exact_match_first() {
         let vectors: Vec<Vec<f32>> = vec![
             vec![0.0, 0.0],
