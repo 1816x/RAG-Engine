@@ -28,6 +28,18 @@ export interface DocumentInfo {
   n_chunks: number;
 }
 
+export interface Stats {
+  documents: number;
+  chunks: number;
+  dim: number;
+  metric: string;
+  min_score: number | null;
+  m: number;
+  ef_construction: number;
+  embedder: string;
+  generation: "mock" | "claude";
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${SERVICE_URL}${path}`, {
     ...init,
@@ -57,4 +69,8 @@ export function addDocument(title: string, text: string): Promise<DocumentInfo> 
 
 export function listDocuments(): Promise<DocumentInfo[]> {
   return call<DocumentInfo[]>("/documents");
+}
+
+export function getStats(): Promise<Stats> {
+  return call<Stats>("/stats");
 }
