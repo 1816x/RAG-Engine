@@ -61,6 +61,17 @@ def _positive_env_int(name: str, default: int) -> int:
     return value
 
 
+def _add_cors_middleware(target: FastAPI, origins: List[str]) -> None:
+    if not origins:
+        return
+    target.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
+
+
 MAX_TITLE_CHARS = _positive_env_int("RAG_MAX_TITLE_CHARS", 200)
 MAX_DOCUMENT_CHARS = _positive_env_int("RAG_MAX_DOCUMENT_CHARS", 1_000_000)
 MAX_QUESTION_CHARS = _positive_env_int("RAG_MAX_QUESTION_CHARS", 2_000)
@@ -163,14 +174,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="RAG Engine service", version="0.1.0", lifespan=lifespan)
 
-cors_origins = _cors_origins()
-if cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type"],
-    )
+_add_cors_middleware(app, _cors_origins())
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 
 

@@ -38,6 +38,13 @@ export interface Stats {
   ef_construction: number;
   embedder: string;
   generation: "mock" | "claude";
+  uploads_enabled: boolean;
+  limits: {
+    title_chars: number;
+    document_chars: number;
+    question_chars: number;
+    request_bytes: number;
+  };
 }
 
 export class RagServiceError extends Error {

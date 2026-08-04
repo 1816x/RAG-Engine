@@ -47,7 +47,7 @@ The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the R
 - **No `ANTHROPIC_API_KEY`.** It runs in mock mode: answers are extractive, tagged with a visible `mock` badge. Nothing calls Claude, so there's no key on a public endpoint and no spend to burn. Retrieval — the HNSW index, which is the point of the project — is fully real.
 - **The hashed fallback embedder**, not `sentence-transformers` (which would drag `torch` into the image). That means retrieval matches on *term overlap, not meaning*. Don't mistake the demo for semantic search; install `sentence-transformers` and set `RAG_EMBEDDER=model` for that. `GET /stats` reports which backend is live so you never have to guess.
 - **Cold starts.** Scaled to zero, the first request after an idle period waits a second or two for the machine to wake.
-- **A live document workspace.** The UI accepts Markdown or plain text, lists every indexed document, and shows the active corpus, embedding, HNSW, relevance, and generation configuration. Documents are held in memory and disappear when the service starts fresh.
+- **A visible, locked document workspace.** The UI lists every indexed document and shows the active corpus, embedding, HNSW, relevance, generation, and upload configuration. Public uploads are disabled by default; enabling them is an explicit deployment choice. Documents are held in memory and disappear when the service starts fresh.
 
 ## Quick start
 
@@ -82,8 +82,8 @@ idx.search(query, k=10)                 # -> [(id, distance), ...] closest first
 ```sh
 # terminal 1 — the Python service (reuses the bindings venv)
 cd service && pip install -r requirements.txt
-uvicorn rag_service.app:app --port 8000
-python scripts/seed.py                  # upload the sample corpus
+RAG_UPLOADS_ENABLED=1 uvicorn rag_service.app:app --port 8000
+python scripts/seed.py                  # uploads require the flag above
 
 # terminal 2 — the Next.js UI
 cd app && npm install
@@ -105,10 +105,37 @@ The HNSW index remains real in every mode. Its live document count, chunk count,
 vector dimension, metric, `M`, `ef_construction`, and relevance floor are
 visible alongside the document library.
 
-To add material from the UI, select a `.md`, `.markdown`, or `.txt` file
-(or paste text), give it a title, and choose **Add to index**. The browser reads
-the file as text and sends the title and content to the existing document API;
-no file is stored on disk.
+The upload panel remains visible when uploads are disabled, but its controls
+are locked and explain how to opt in. To add material locally, start both Fly.io
+and Vercel-compatible environments with `RAG_UPLOADS_ENABLED=1`, then select a
+`.md`, `.markdown`, or `.txt` file (or paste text), give it a title, and
+choose **Add to index**. The browser reads the file as text; no file is stored
+on disk. `scripts/seed.py` uses the same protected upload endpoint and
+therefore also requires uploads to be enabled. Startup seeding is unaffected
+because it inserts directly into the in-process store.
+
+### Public API hardening
+
+| Variable | Default | Behavior |
+|----------|---------|----------|
+| `RAG_UPLOADS_ENABLED` | `0` | Enables `POST /documents` only when explicitly set to `1`, `true`, `yes`, or `on`. |
+| `RAG_MAX_TITLE_CHARS` | `200` | Maximum document title length. |
+| `RAG_MAX_DOCUMENT_CHARS` | `1000000` | Maximum document text length. |
+| `RAG_MAX_QUESTION_CHARS` | `2000` | Maximum query length. |
+| `RAG_MAX_REQUEST_BYTES` | `4194304` | Maximum HTTP request body size (4 MiB), enforced before JSON parsing. |
+| `RAG_CLAUDE_TIMEOUT_SECONDS` | `30` | Claude request timeout; automatic SDK retries are disabled. |
+| `RAG_CORS_ORIGINS` | empty | Exact comma-separated allowed origins. Empty installs no CORS middleware; `*` restores wildcard access explicitly. |
+
+Chunking accepts `max_words` from 1 through 1000 and `overlap` from 0
+through 999, with overlap strictly smaller than the chunk size. Query `k`
+remains 1 through 50 and `ef_search` is limited to 1 through 2000. Oversized
+bodies return `413`, invalid fields return `422`, disabled uploads return
+`403`, and Claude timeouts return `504`. The Next.js same-origin proxy
+preserves these status codes and service messages.
+
+If deployment-specific limits are changed, set the same `RAG_MAX_*` values in
+both the service environment (Fly.io) and the Next.js environment (Vercel) so
+the UI, proxy, and backend enforce one contract.
 
 ## Roadmap
 
@@ -160,7 +187,7 @@ This section grows as the project does; each phase documents the trade-offs it m
 |-------|---------|-------|
 | Rust engine | `cargo test` | 24 (unit + seeded recall vs. brute force + doctest) |
 | Python bindings + helpers | `pytest` in `bindings/` | 21 (FFI surface, atomic batches, validation, chunking, embeddings, E2E retrieval) |
-| RAG service | `PYTHONPATH=. pytest` in `service/` | 17 (keyless E2E, relevance filtering, citation parsing, startup seeding) |
+| RAG service | `PYTHONPATH=. pytest` in `service/` | 36 (keyless E2E, hardening limits, CORS, Claude timeout, relevance filtering, citation parsing, startup seeding) |
 | Next.js app | `npm run build` | type-checked production build |
 
 CI (`.github/workflows/ci.yml`) runs all four on every push, in parallel jobs: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`, the bindings suite, the service suite, and the app build.

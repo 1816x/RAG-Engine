@@ -18,6 +18,13 @@ primary_region = "iad"   # change to whichever region is nearest you
   # its bundled sample corpus on startup. Also set in the Dockerfile; kept here
   # so the behavior is visible in the deploy config.
   RAG_SEED_ON_STARTUP = "1"
+  RAG_UPLOADS_ENABLED = "0"
+  RAG_CORS_ORIGINS = ""
+  RAG_CLAUDE_TIMEOUT_SECONDS = "30"
+  RAG_MAX_TITLE_CHARS = "200"
+  RAG_MAX_DOCUMENT_CHARS = "1000000"
+  RAG_MAX_QUESTION_CHARS = "2000"
+  RAG_MAX_REQUEST_BYTES = "4194304"
 
 [http_service]
   internal_port = 8080
