@@ -146,6 +146,8 @@ class DocumentStore:
                 "dim": self.dim,
                 "metric": self.metric,
                 "min_score": self.min_score,
+                "m": self.m,
+                "ef_construction": self.ef_construction,
                 # Which embedding backend is actually live. Worth surfacing:
                 # HashedEmbedder matches on term overlap, not meaning, so a
                 # reader should not mistake it for semantic search.

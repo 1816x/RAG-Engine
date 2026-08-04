@@ -37,6 +37,11 @@ def test_stats_after_seed(client):
     assert stats["chunks"] >= 3
     assert stats["metric"] == "cosine"
     assert stats["min_score"] == pytest.approx(0.09)
+    assert stats["dim"] == 384
+    assert stats["m"] == 16
+    assert stats["ef_construction"] == 200
+    assert stats["embedder"] == "HashedEmbedder"
+    assert stats["generation"] == "mock"
 
 
 def test_documents_listed(client):

@@ -47,6 +47,7 @@ The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the R
 - **No `ANTHROPIC_API_KEY`.** It runs in mock mode: answers are extractive, tagged with a visible `mock` badge. Nothing calls Claude, so there's no key on a public endpoint and no spend to burn. Retrieval — the HNSW index, which is the point of the project — is fully real.
 - **The hashed fallback embedder**, not `sentence-transformers` (which would drag `torch` into the image). That means retrieval matches on *term overlap, not meaning*. Don't mistake the demo for semantic search; install `sentence-transformers` and set `RAG_EMBEDDER=model` for that. `GET /stats` reports which backend is live so you never have to guess.
 - **Cold starts.** Scaled to zero, the first request after an idle period waits a second or two for the machine to wake.
+- **A live document workspace.** The UI accepts Markdown or plain text, lists every indexed document, and shows the active corpus, embedding, HNSW, relevance, and generation configuration. Documents are held in memory and disappear when the service starts fresh.
 
 ## Quick start
 
@@ -96,6 +97,18 @@ Retrieval drops chunks whose relevance score is below `RAG_MIN_SCORE`
 sources and says the indexed documents do not address the question. Tune the
 threshold for a different embedding model or set it to `-1` to preserve every
 cosine-search hit.
+
+The web UI makes the runtime modes explicit instead of collapsing them into a
+single model badge. **Retrieval** is labeled lexical/hashed or semantic based on
+the active embedder; **answer generation** is labeled extractive mock or Claude.
+The HNSW index remains real in every mode. Its live document count, chunk count,
+vector dimension, metric, `M`, `ef_construction`, and relevance floor are
+visible alongside the document library.
+
+To add material from the UI, select a `.md`, `.markdown`, or `.txt` file
+(or paste text), give it a title, and choose **Add to index**. The browser reads
+the file as text and sends the title and content to the existing document API;
+no file is stored on disk.
 
 ## Roadmap
 

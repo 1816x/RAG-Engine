@@ -131,7 +131,9 @@ def healthz() -> dict:
 
 @app.get("/stats")
 def stats() -> dict:
-    return _store.stats()
+    data = _store.stats()
+    data["generation"] = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
+    return data
 
 
 @app.get("/documents", response_model=List[DocumentOut])
