@@ -20,15 +20,96 @@ import os
 import pathlib
 from typing import AsyncIterator, List, Optional
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .generation import generate_answer
 from .store import DocumentStore
 from hnsw_rag import get_embedder
 
 log = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    return value
+
+
+MAX_TITLE_CHARS = _positive_env_int("RAG_MAX_TITLE_CHARS", 200)
+MAX_DOCUMENT_CHARS = _positive_env_int("RAG_MAX_DOCUMENT_CHARS", 1_000_000)
+MAX_QUESTION_CHARS = _positive_env_int("RAG_MAX_QUESTION_CHARS", 2_000)
+MAX_REQUEST_BYTES = _positive_env_int("RAG_MAX_REQUEST_BYTES", 4 * 1024 * 1024)
+
+
+class BodySizeLimitMiddleware:
+    """Reject oversized request bodies before JSON parsing."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                if int(raw_length) > self.max_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                pass
+
+        messages: List[Message] = []
+        total = 0
+        more_body = True
+        while more_body:
+            message = await receive()
+            messages.append(message)
+            if message["type"] == "http.disconnect":
+                break
+            if message["type"] == "http.request":
+                total += len(message.get("body", b""))
+                if total > self.max_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+                more_body = message.get("more_body", False)
+
+        position = 0
+
+        async def replay() -> Message:
+            nonlocal position
+            if position < len(messages):
+                message = messages[position]
+                position += 1
+                return message
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay, send)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            {"detail": f"request body exceeds {self.max_bytes} bytes"},
+            status_code=413,
+        )
+        await response(scope, receive, send)
+
 
 # One in-memory store for the process. The embedder backend is chosen at
 # startup: real model if available, deterministic hashed fallback otherwise.
@@ -39,10 +120,6 @@ _store = DocumentStore(
 )
 
 SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"
-
-
-def _env_flag(name: str, default: str = "0") -> bool:
-    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def seed_sample_docs() -> int:
@@ -64,13 +141,7 @@ def seed_sample_docs() -> int:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Optionally seed the sample corpus on boot.
-
-    Off by default so local runs and the test suite keep their existing
-    behavior (seed explicitly via `scripts/seed.py` or a fixture). Deployments
-    turn it on — see `RAG_SEED_ON_STARTUP` in fly.toml. Also guarded on an
-    empty index so it can never double-seed.
-    """
+    """Optionally seed the sample corpus on boot."""
     if _env_flag("RAG_SEED_ON_STARTUP") and _store.stats()["chunks"] == 0:
         added = seed_sample_docs()
         log.info("seeded %d sample document(s) on startup", added)
@@ -79,20 +150,47 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="RAG Engine service", version="0.1.0", lifespan=lifespan)
 
-# The Next.js dev server calls this cross-origin.
+# CORS becomes configurable in the next hardening step.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
+
+
+def _require_uploads_enabled() -> None:
+    if not _env_flag("RAG_UPLOADS_ENABLED"):
+        raise HTTPException(status_code=403, detail="document uploads are disabled")
 
 
 class DocumentIn(BaseModel):
-    title: str = Field(..., min_length=1)
-    text: str = Field(..., min_length=1)
-    max_words: int = 180
-    overlap: int = 40
+    title: str = Field(..., min_length=1, max_length=MAX_TITLE_CHARS)
+    text: str = Field(..., min_length=1, max_length=MAX_DOCUMENT_CHARS)
+    max_words: int = Field(180, ge=1, le=1000)
+    overlap: int = Field(40, ge=0, le=999)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_chunk_window(self):
+        if self.overlap >= self.max_words:
+            raise ValueError("overlap must be smaller than max_words")
+        return self
 
 
 class DocumentOut(BaseModel):
@@ -102,9 +200,17 @@ class DocumentOut(BaseModel):
 
 
 class QueryIn(BaseModel):
-    question: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1, max_length=MAX_QUESTION_CHARS)
     k: int = Field(5, ge=1, le=50)
-    ef_search: int = Field(100, ge=1)
+    ef_search: int = Field(100, ge=1, le=2000)
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("question must not be blank")
+        return value
 
 
 class SourceOut(BaseModel):
@@ -133,6 +239,13 @@ def healthz() -> dict:
 def stats() -> dict:
     data = _store.stats()
     data["generation"] = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
+    data["uploads_enabled"] = _env_flag("RAG_UPLOADS_ENABLED")
+    data["limits"] = {
+        "title_chars": MAX_TITLE_CHARS,
+        "document_chars": MAX_DOCUMENT_CHARS,
+        "question_chars": MAX_QUESTION_CHARS,
+        "request_bytes": MAX_REQUEST_BYTES,
+    }
     return data
 
 
@@ -144,7 +257,11 @@ def list_documents() -> List[DocumentOut]:
     ]
 
 
-@app.post("/documents", response_model=DocumentOut)
+@app.post(
+    "/documents",
+    response_model=DocumentOut,
+    dependencies=[Depends(_require_uploads_enabled)],
+)
 def add_document(doc: DocumentIn) -> DocumentOut:
     result = _store.add_document(
         doc.title, doc.text, max_words=doc.max_words, overlap=doc.overlap
