@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { query } from "@/app/lib/rag";
-import { INPUT_LIMITS, InputRequestError, readLimitedJson } from "@/app/lib/limits";
+import { INPUT_LIMITS, readLimitedJson } from "@/app/lib/limits";
+import { apiErrorResponse } from "@/app/lib/api-errors";
 
 export async function POST(req: Request) {
   try {
@@ -21,10 +22,6 @@ export async function POST(req: Request) {
     );
     return NextResponse.json(result);
   } catch (err) {
-    const status = err instanceof InputRequestError ? err.status : 502;
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "unknown error" },
-      { status },
-    );
+    return apiErrorResponse(err);
   }
 }

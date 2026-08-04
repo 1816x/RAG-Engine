@@ -40,17 +40,51 @@ export interface Stats {
   generation: "mock" | "claude";
 }
 
+export class RagServiceError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "RagServiceError";
+  }
+}
+
+function errorMessage(body: string, status: number): string {
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown; error?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (typeof parsed.error === "string") return parsed.error;
+    if (Array.isArray(parsed.detail)) {
+      const messages = parsed.detail
+        .map((item) =>
+          typeof item === "object" &&
+          item !== null &&
+          "msg" in item &&
+          typeof item.msg === "string"
+            ? item.msg
+            : null,
+        )
+        .filter((message): message is string => message !== null);
+      if (messages.length) return messages.join("; ");
+    }
+  } catch {
+    // Preserve a non-JSON service response below.
+  }
+  return body || `RAG service request failed with status ${status}`;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${SERVICE_URL}${path}`, {
+  const response = await fetch(`${SERVICE_URL}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     cache: "no-store",
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`RAG service ${res.status}: ${body}`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new RagServiceError(errorMessage(body, response.status), response.status);
   }
-  return res.json() as Promise<T>;
+  return response.json() as Promise<T>;
 }
 
 export function query(question: string, k = 5): Promise<QueryResult> {

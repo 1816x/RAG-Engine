@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .generation import generate_answer
+from .generation import GenerationTimeoutError, generate_answer
 from .store import DocumentStore
 from hnsw_rag import get_embedder
 
@@ -35,6 +35,19 @@ log = logging.getLogger(__name__)
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cors_origins() -> List[str]:
+    raw = os.environ.get("RAG_CORS_ORIGINS", "").strip()
+    if not raw:
+        return []
+    if raw == "*":
+        return ["*"]
+
+    origins = list(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
+    if "*" in origins:
+        raise RuntimeError("RAG_CORS_ORIGINS must be '*' or a list of exact origins")
+    return origins
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -150,13 +163,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="RAG Engine service", version="0.1.0", lifespan=lifespan)
 
-# CORS becomes configurable in the next hardening step.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_origins = _cors_origins()
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 
 
@@ -272,7 +286,10 @@ def add_document(doc: DocumentIn) -> DocumentOut:
 @app.post("/query", response_model=QueryOut)
 def query(q: QueryIn) -> QueryOut:
     chunks = _store.retrieve(q.question, k=q.k, ef_search=q.ef_search)
-    answer = generate_answer(q.question, chunks)
+    try:
+        answer = generate_answer(q.question, chunks)
+    except GenerationTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     cited = set(answer.cited_chunk_ids)
     sources = [
         SourceOut(

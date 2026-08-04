@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
 import { addDocument, listDocuments } from "@/app/lib/rag";
-import { INPUT_LIMITS, InputRequestError, readLimitedJson } from "@/app/lib/limits";
+import { INPUT_LIMITS, readLimitedJson } from "@/app/lib/limits";
+import { apiErrorResponse } from "@/app/lib/api-errors";
 
 export async function GET() {
   try {
     return NextResponse.json(await listDocuments());
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "unknown error" },
-      { status: 502 },
-    );
+    return apiErrorResponse(err);
   }
 }
 
@@ -37,10 +35,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json(await addDocument(body.title.trim(), body.text));
   } catch (err) {
-    const status = err instanceof InputRequestError ? err.status : 502;
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "unknown error" },
-      { status },
-    );
+    return apiErrorResponse(err);
   }
 }

@@ -15,9 +15,8 @@ from typing import List, Optional
 
 from .store import RetrievedChunk
 
-# Latest Sonnet is a good default for grounded RAG answers: fast, cheap, and
-# strong at instruction-following. Override with RAG_MODEL if you want Opus.
 DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_CLAUDE_TIMEOUT_SECONDS = 30.0
 
 SYSTEM_PROMPT = """You answer questions using only the provided source chunks.
 
@@ -29,6 +28,14 @@ numbered sources.
 - Be concise. Lead with the answer, then support it."""
 
 
+class GenerationTimeoutError(TimeoutError):
+    def __init__(self, timeout_seconds: float) -> None:
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"Claude generation timed out after {timeout_seconds:g} seconds"
+        )
+
+
 @dataclass
 class Answer:
     text: str
@@ -36,35 +43,38 @@ class Answer:
     model: str  # "claude-…" or "mock"
 
 
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    return value
+
+
 def _format_sources(chunks: List[RetrievedChunk]) -> str:
     blocks = []
-    for i, c in enumerate(chunks, start=1):
-        blocks.append(f"[{i}] (source: {c.doc_title})\n{c.text}")
+    for i, chunk in enumerate(chunks, start=1):
+        blocks.append(f"[{i}] (source: {chunk.doc_title})\n{chunk.text}")
     return "\n\n".join(blocks)
 
 
 def parse_citations(text: str, chunks: List[RetrievedChunk]) -> List[int]:
-    """Map the `[n]` markers in an answer back to the chunk ids they refer to.
-
-    The sources are numbered 1..len(chunks) in the prompt, so `[2]` means
-    `chunks[1]`. Out-of-range markers (the model inventing `[9]` for three
-    sources) are ignored rather than trusted. Returns ids in first-mention
-    order, deduplicated — so a "cited" flag actually means the answer used
-    that chunk, instead of just "we retrieved it".
-    """
+    """Map answer citation markers back to chunk ids."""
     cited: List[int] = []
     for marker in re.findall(r"\[(\d+)\]", text):
         idx = int(marker) - 1
         if 0 <= idx < len(chunks):
-            cid = chunks[idx].id
-            if cid not in cited:
-                cited.append(cid)
+            chunk_id = chunks[idx].id
+            if chunk_id not in cited:
+                cited.append(chunk_id)
     return cited
 
 
 def _mock_answer(question: str, chunks: List[RetrievedChunk]) -> Answer:
-    """Deterministic, keyless fallback: return the single most relevant chunk
-    as the answer, cited. Good enough to prove the pipeline end to end."""
+    """Return the most relevant chunk as a deterministic, keyless answer."""
     if not chunks:
         return Answer(
             text="I don't have any indexed documents that address that question.",
@@ -85,11 +95,7 @@ def generate_answer(
     *,
     model: Optional[str] = None,
 ) -> Answer:
-    """Generate an answer to `question` grounded in `chunks`.
-
-    Falls back to mock mode when ANTHROPIC_API_KEY is unset or the `anthropic`
-    package isn't installed.
-    """
+    """Generate an answer grounded in chunks, or use keyless mock mode."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return _mock_answer(question, chunks)
@@ -106,20 +112,26 @@ def generate_answer(
             model="mock",
         )
 
+    timeout_seconds = _positive_env_float(
+        "RAG_CLAUDE_TIMEOUT_SECONDS", DEFAULT_CLAUDE_TIMEOUT_SECONDS
+    )
     model = model or os.environ.get("RAG_MODEL", DEFAULT_MODEL)
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(timeout=timeout_seconds, max_retries=0)
     user_content = (
         f"Sources:\n\n{_format_sources(chunks)}\n\n"
         f"Question: {question}\n\n"
         f"Answer using only the sources above, citing them with [n] markers."
     )
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+    except anthropic.APITimeoutError as exc:
+        raise GenerationTimeoutError(timeout_seconds) from exc
 
     if response.stop_reason == "refusal":
         return Answer(
