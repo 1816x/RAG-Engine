@@ -69,6 +69,11 @@ export default function Home() {
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
+  const uploadsEnabled = stats?.uploads_enabled ?? false;
+  const titleLimit = stats?.limits.title_chars ?? 200;
+  const documentLimit = stats?.limits.document_chars ?? 1_000_000;
+  const questionLimit = stats?.limits.question_chars ?? 2_000;
+
   const loadWorkspace = useCallback(async () => {
     setWorkspaceLoading(true);
     setWorkspaceError(null);
@@ -113,12 +118,20 @@ export default function Home() {
   }
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
+    if (!uploadsEnabled) return;
     const file = event.target.files?.[0];
     if (!file) return;
 
     setUploadError(null);
     try {
       const text = await file.text();
+      if (text.length > documentLimit) {
+        setUploadError(
+          `Document exceeds the ${documentLimit.toLocaleString()} character limit.`,
+        );
+        event.target.value = "";
+        return;
+      }
       setDocumentText(text);
       if (!documentTitle.trim()) {
         setDocumentTitle(file.name.replace(/\.(md|markdown|txt)$/i, ""));
@@ -130,7 +143,7 @@ export default function Home() {
 
   async function uploadDocument(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!documentTitle.trim() || !documentText.trim()) return;
+    if (!uploadsEnabled || !documentTitle.trim() || !documentText.trim()) return;
 
     setUploadLoading(true);
     setUploadError(null);
@@ -239,12 +252,16 @@ export default function Home() {
             <textarea
               id="question"
               rows={4}
+              maxLength={questionLimit}
               value={question}
               placeholder="How does HNSW search descend through its layers?"
               onChange={(event) => setQuestion(event.target.value)}
             />
             <div className="form-actions">
-              <span className="form-hint">Returns up to 5 grounded sources</span>
+              <span className="form-hint">
+                {question.length.toLocaleString()} / {questionLimit.toLocaleString()} characters
+                · up to 5 sources
+              </span>
               <button type="submit" disabled={queryLoading || !question.trim()}>
                 {queryLoading ? "Searching…" : "Search index"}
               </button>
@@ -332,14 +349,30 @@ export default function Home() {
         </div>
 
         <div className="document-grid">
-          <form className="panel upload-panel" onSubmit={uploadDocument}>
+          <form
+            className={`panel upload-panel${uploadsEnabled ? "" : " locked"}`}
+            onSubmit={uploadDocument}
+            aria-disabled={!uploadsEnabled}
+          >
             <div className="panel-heading compact">
               <div>
                 <p className="section-kicker">ADD SOURCE</p>
                 <h3>Index a document</h3>
               </div>
-              <span className="step-label">02</span>
+              <span className={`upload-status ${uploadsEnabled ? "enabled" : "locked"}`}>
+                {stats ? (uploadsEnabled ? "Enabled" : "Locked") : "Loading"}
+              </span>
             </div>
+
+            {stats && !uploadsEnabled && (
+              <div className="upload-lock-notice" role="status">
+                <strong>Uploads are disabled on this deployment.</strong>
+                <span>
+                  The workspace stays visible for transparency. Set
+                  {" "}<code>RAG_UPLOADS_ENABLED=1</code>{" "}on the service to unlock it.
+                </span>
+              </div>
+            )}
 
             <label htmlFor="document-file">Choose a text file</label>
             <input
@@ -348,6 +381,7 @@ export default function Home() {
               className="file-input"
               type="file"
               accept=".md,.markdown,.txt,text/plain,text/markdown"
+              disabled={!uploadsEnabled || uploadLoading}
               onChange={(event) => void chooseFile(event)}
             />
 
@@ -357,24 +391,43 @@ export default function Home() {
             <input
               id="document-title"
               value={documentTitle}
+              maxLength={titleLimit}
+              disabled={!uploadsEnabled || uploadLoading}
               placeholder="Architecture notes"
               onChange={(event) => setDocumentTitle(event.target.value)}
             />
+            <span className="character-count">
+              {documentTitle.length.toLocaleString()} / {titleLimit.toLocaleString()} characters
+            </span>
 
             <label htmlFor="document-text">Document text</label>
             <textarea
               id="document-text"
               rows={9}
               value={documentText}
+              maxLength={documentLimit}
+              disabled={!uploadsEnabled || uploadLoading}
               placeholder="Paste the source material to index…"
               onChange={(event) => setDocumentText(event.target.value)}
             />
+            <span className="character-count">
+              {documentText.length.toLocaleString()} / {documentLimit.toLocaleString()} characters
+            </span>
 
             <div className="form-actions">
-              <span className="form-hint">Stored in memory for this service instance</span>
+              <span className="form-hint">
+                {uploadsEnabled
+                  ? "Stored in memory for this service instance"
+                  : "Read-only public demo"}
+              </span>
               <button
                 type="submit"
-                disabled={uploadLoading || !documentTitle.trim() || !documentText.trim()}
+                disabled={
+                  !uploadsEnabled ||
+                  uploadLoading ||
+                  !documentTitle.trim() ||
+                  !documentText.trim()
+                }
               >
                 {uploadLoading ? "Indexing…" : "Add to index"}
               </button>
