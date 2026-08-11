@@ -40,6 +40,7 @@ export interface Stats {
   embedder: string;
   generation: "mock" | "claude";
   uploads_enabled: boolean;
+  persistence: { enabled: boolean; loaded: boolean; format_version: number };
   limits: {
     title_chars: number;
     document_chars: number;

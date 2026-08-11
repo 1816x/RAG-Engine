@@ -131,3 +131,20 @@ def test_recall_against_brute_force():
         total += len(truth & got) / k
     recall = total / len(queries)
     assert recall >= 0.95, f"recall@{k} too low: {recall:.4f}"
+
+
+def test_snapshot_roundtrip_and_continue_insert(tmp_path):
+    path = tmp_path / "index.hnsw"
+    index = Hnsw(dim=2, metric="euclidean", seed=9)
+    index.insert_batch([[0.0, 0.0], [2.0, 0.0]])
+    expected = index.search([1.9, 0.0], k=2)
+    index.save(str(path))
+
+    restored = Hnsw.load(str(path))
+    assert restored.search([1.9, 0.0], k=2) == pytest.approx(expected)
+    assert restored.insert([4.0, 0.0]) == 2
+    assert restored.search([4.0, 0.0], k=1)[0][0] == 2
+
+    path.write_bytes(path.read_bytes()[:-3])
+    with pytest.raises(ValueError, match="snapshot"):
+        Hnsw.load(str(path))

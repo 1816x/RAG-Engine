@@ -38,7 +38,7 @@ fly launch --no-deploy   # claims an app name, keeps the committed fly.toml
 fly deploy
 ```
 
-The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the Rust toolchain, stage two installs only that wheel (it's `abi3`, so it's portable across CPython ≥ 3.9). Final image is ~270 MB and runs as a non-root user. `fly.toml` scales to zero when idle and suspends rather than stops, so the in-memory index survives a resume.
+The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the Rust toolchain, stage two installs only that wheel (it's `abi3`, so it's portable across CPython ≥ 3.9). Final image is ~270 MB and runs as a non-root user. `fly.toml` scales to zero when idle and suspends rather than stops, so the default in-memory index survives a resume. Durable snapshots can be enabled explicitly as described below.
 
 **Frontend (Vercel):** deploy `app/` as its own project. Point it at the backend with `RAG_SERVICE_URL`, or set `DEFAULT_RAG_SERVICE_URL` in `app/app/lib/config.ts` (it's a public URL, not a secret).
 
@@ -47,7 +47,7 @@ The `Dockerfile` is multi-stage — stage one compiles the PyO3 wheel with the R
 - **No `ANTHROPIC_API_KEY`.** It runs in mock mode: answers are extractive, tagged with a visible `mock` badge. Nothing calls Claude, so there's no key on a public endpoint and no spend to burn. Retrieval — the HNSW index, which is the point of the project — is fully real.
 - **The hashed fallback embedder**, not `sentence-transformers` (which would drag `torch` into the image). That means retrieval matches on *term overlap, not meaning*. Don't mistake the demo for semantic search; install `sentence-transformers` and set `RAG_EMBEDDER=model` for that. `GET /stats` reports which backend is live so you never have to guess.
 - **Cold starts.** Scaled to zero, the first request after an idle period waits a second or two for the machine to wake.
-- **A visible, locked document workspace.** The UI lists every indexed document and shows the active corpus, embedding, HNSW, relevance, generation, and upload configuration. Public uploads are disabled by default; enabling them is an explicit deployment choice. Documents are held in memory and disappear when the service starts fresh.
+- **A visible, locked document workspace.** The UI lists every indexed document and shows the active corpus, embedding, HNSW, relevance, generation, and upload configuration. Public uploads are disabled by default; enabling them is an explicit deployment choice. The hosted configuration remains in-memory; deployments can opt into durable local snapshots with `RAG_STATE_PATH`.
 
 ## Quick start
 
@@ -75,6 +75,8 @@ from hnsw_engine import Hnsw
 idx = Hnsw(dim=384, metric="cosine")
 idx.insert_batch(vectors)               # -> [0, 1, 2, ...]
 idx.search(query, k=10)                 # -> [(id, distance), ...] closest first
+idx.save("index.hnsw")                  # atomic, versioned binary snapshot
+idx = Hnsw.load("index.hnsw")           # checked restore; inserts may continue
 ```
 
 **3. Full RAG (service + app):** the service runs **without an API key** in mock mode, so you can see the whole pipeline before adding one.
@@ -114,10 +116,43 @@ on disk. `scripts/seed.py` uses the same protected upload endpoint and
 therefore also requires uploads to be enabled. Startup seeding is unaffected
 because it inserts directly into the in-process store.
 
+### Optional durable persistence
+
+The default remains process-local and in-memory. Set `RAG_STATE_PATH` to a writable
+file (for example `/data/corpus.rag`) to opt in. If the file does not exist the
+service starts empty and creates it after the first successful insertion. If it
+does exist, startup restores the HNSW vectors and graph, chunk text and provenance,
+document metadata, the next document id, construction settings, and embedder
+identity. `/stats` reports whether persistence is enabled, whether state was loaded
+at startup, and the service-state format version, without revealing the path.
+
+The Rust index uses a dependency-free little-endian binary format with an
+`HNSWSNP` magic header, explicit version, dimensions/metric/construction parameters,
+current SplitMix64 state, vectors, per-level graph links, and an FNV-1a checksum.
+Loading rejects unsupported versions, truncation, checksum failures, non-finite
+vectors, unreasonable sizes, and invalid graph references. Search-only scratch
+buffers are reconstructed rather than serialized. The service wraps that binary
+snapshot with deterministic JSON metadata in a versioned `RAGSTATE` container and
+a BLAKE2b checksum.
+
+Each persistent insertion is staged against a cloned index while holding the store
+lock. The complete container is written to a sibling temporary file, flushed and
+`fsync`ed, atomically replaced, and its parent directory is `fsync`ed before the
+new in-memory state is published and HTTP success is returned. A failed commit
+therefore retains the previous file and previous live corpus. Corrupt state causes
+startup to fail; it is never silently discarded. Stored index settings, embedding
+dimension, backend class, and model name (where applicable) must match the runtime.
+
+Limitations: snapshots coordinate one service process only; do not point multiple
+workers or hosts at the same file. Durability ultimately depends on the filesystem's
+`fsync` and atomic-replace semantics. There is no deletion, migration between
+embedder configurations, or automatic recovery of a corrupt snapshot.
+
 ### Public API hardening
 
 | Variable | Default | Behavior |
 |----------|---------|----------|
+| `RAG_STATE_PATH` | empty | Enables the versioned durable corpus snapshot at the configured file. Empty preserves in-memory behavior. |
 | `RAG_UPLOADS_ENABLED` | `0` | Enables `POST /documents` only when explicitly set to `1`, `true`, `yes`, or `on`. |
 | `RAG_MAX_TITLE_CHARS` | `200` | Maximum document title length. |
 | `RAG_MAX_DOCUMENT_CHARS` | `1000000` | Maximum document text length. |

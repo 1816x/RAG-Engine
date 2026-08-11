@@ -61,6 +61,11 @@ def test_stats_after_seed(client):
     assert stats["embedder"] == "HashedEmbedder"
     assert stats["generation"] == "mock"
     assert stats["uploads_enabled"] is False
+    assert stats["persistence"] == {
+        "enabled": False,
+        "loaded": False,
+        "format_version": 1,
+    }
     assert stats["limits"] == {
         "title_chars": MAX_TITLE_CHARS,
         "document_chars": MAX_DOCUMENT_CHARS,

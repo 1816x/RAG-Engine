@@ -4,8 +4,9 @@
 //! boundary as plain Python sequences of floats — no NumPy dependency, which
 //! keeps the module tiny; convert with `list(array)` if you have arrays.
 
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 use hnsw_engine as engine;
 
@@ -23,6 +24,13 @@ fn parse_metric(metric: &str) -> PyResult<engine::Metric> {
         other => Err(PyValueError::new_err(format!(
             "unknown metric {other:?}; expected \"cosine\" or \"euclidean\""
         ))),
+    }
+}
+
+fn snapshot_error(error: engine::Error) -> PyErr {
+    match error {
+        engine::Error::Io(_) => PyIOError::new_err(error.to_string()),
+        _ => PyValueError::new_err(error.to_string()),
     }
 }
 
@@ -118,6 +126,30 @@ impl Hnsw {
             .vector(id)
             .map(|s| s.to_vec())
             .ok_or_else(|| PyIndexError::new_err(format!("no vector with id {id}")))
+    }
+
+    /// Atomically save the versioned binary index snapshot.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.inner.save(path).map_err(snapshot_error)
+    }
+
+    /// Restore an index, rejecting corrupt or unsupported snapshots.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        engine::Hnsw::load(path)
+            .map(|inner| Self { inner })
+            .map_err(snapshot_error)
+    }
+
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.to_bytes())
+    }
+
+    #[staticmethod]
+    fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        engine::Hnsw::from_bytes(data)
+            .map(|inner| Self { inner })
+            .map_err(snapshot_error)
     }
 
     fn __len__(&self) -> usize {

@@ -14,6 +14,10 @@ impl SplitMix64 {
         Self { state: seed }
     }
 
+    pub(crate) fn state(&self) -> u64 {
+        self.state
+    }
+
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;

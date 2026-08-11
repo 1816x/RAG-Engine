@@ -154,12 +154,13 @@ class BodySizeLimitMiddleware:
         await response(scope, receive, send)
 
 
-# One in-memory store for the process. The embedder backend is chosen at
+# One process-local store; durability is opt-in through RAG_STATE_PATH. The embedder backend is chosen at
 # startup: real model if available, deterministic hashed fallback otherwise.
 _embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
 _store = DocumentStore(
     embedder=_embedder,
     min_score=_finite_env_float("RAG_MIN_SCORE", 0.09),
+    state_path=os.environ.get("RAG_STATE_PATH"),
 )
 
 SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"
@@ -168,9 +169,7 @@ SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"
 def seed_sample_docs() -> int:
     """Index the bundled sample corpus in-process. Returns documents added.
 
-    The index is in-memory, so a fresh container starts empty. `scripts/seed.py`
-    solves that over HTTP for a running instance, but a hosted deployment has
-    nobody to run it — hence this in-process path for startup.
+    The hosted demo has persistence disabled, so startup seeding remains useful.
     """
     if not SAMPLE_DOCS.is_dir():
         log.warning("sample corpus not found at %s; starting with an empty index", SAMPLE_DOCS)
