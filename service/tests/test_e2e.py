@@ -136,6 +136,17 @@ def test_oversized_http_body_returns_413_before_json_parsing(client):
     assert "exceeds" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("content_length", ["not-a-number", "-1"])
+def test_invalid_content_length_returns_400(client, content_length):
+    response = client.post(
+        "/query",
+        content=b'{}',
+        headers={"Content-Length": content_length, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid Content-Length header"
+
+
 def test_claude_timeout_is_exposed_as_504(client, monkeypatch):
     app_module = importlib.import_module("rag_service.app")
 

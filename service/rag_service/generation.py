@@ -8,6 +8,7 @@ RAG app is demoable — and testable in CI — without a key or network.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ def _positive_env_float(name: str, default: float) -> float:
         value = float(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be a number") from exc
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise RuntimeError(f"{name} must be greater than zero")
     return value
 

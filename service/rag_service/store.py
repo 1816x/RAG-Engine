@@ -82,6 +82,10 @@ class DocumentStore:
                 return doc
 
         vectors = self.embedder.embed([c.text for c in chunks])
+        if len(vectors) != len(chunks):
+            raise ValueError(
+                f"embedder returned {len(vectors)} vectors for {len(chunks)} chunks"
+            )
 
         with self._lock:
             if self._index is None:
@@ -95,6 +99,10 @@ class DocumentStore:
             doc_id = self._next_doc_id
             self._next_doc_id += 1
             ids = self._index.insert_batch(vectors)
+            if len(ids) != len(chunks):
+                raise RuntimeError(
+                    f"index returned {len(ids)} ids for {len(chunks)} chunks"
+                )
             for chunk, cid in zip(chunks, ids):
                 self._chunks[cid] = StoredChunk(
                     id=cid,
@@ -109,33 +117,34 @@ class DocumentStore:
 
     def retrieve(self, query: str, k: int = 5, ef_search: int = 100) -> List[RetrievedChunk]:
         """Embed the query and return the k most relevant chunks."""
+        qvec = self.embedder.embed([query])[0]
         with self._lock:
             if self._index is None or len(self._index) == 0:
                 return []
-            index = self._index
-
-        qvec = self.embedder.embed([query])[0]
-        hits = index.search(qvec, k=k, ef_search=ef_search)
-        out: List[RetrievedChunk] = []
-        for cid, distance in hits:
-            sc = self._chunks[cid]
-            # Cosine distance is 1 - similarity; report similarity so higher
-            # is more relevant, which is what a reader expects from a score.
-            score = 1.0 - distance if self.metric == "cosine" else -distance
-            if self.min_score is not None and score < self.min_score:
-                # Hits are closest-first, so their relevance scores only
-                # decrease. Weak nearest neighbors are not useful grounding.
-                break
-            out.append(
-                RetrievedChunk(
-                    id=sc.id,
-                    text=sc.text,
-                    doc_id=sc.doc_id,
-                    doc_title=sc.doc_title,
-                    ordinal=sc.ordinal,
-                    score=score,
+            # The Python wrapper exposes insert as a mutable operation. Keep
+            # search and its metadata lookup in the same critical section so
+            # concurrent uploads cannot mutate the graph beneath a query.
+            hits = self._index.search(qvec, k=k, ef_search=ef_search)
+            out: List[RetrievedChunk] = []
+            for cid, distance in hits:
+                sc = self._chunks[cid]
+                # Cosine distance is 1 - similarity; report similarity so higher
+                # is more relevant, which is what a reader expects from a score.
+                score = 1.0 - distance if self.metric == "cosine" else -distance
+                if self.min_score is not None and score < self.min_score:
+                    # Hits are closest-first, so their relevance scores only
+                    # decrease. Weak nearest neighbors are not useful grounding.
+                    break
+                out.append(
+                    RetrievedChunk(
+                        id=sc.id,
+                        text=sc.text,
+                        doc_id=sc.doc_id,
+                        doc_title=sc.doc_title,
+                        ordinal=sc.ordinal,
+                        score=score,
+                    )
                 )
-            )
         return out
 
     def stats(self) -> dict:

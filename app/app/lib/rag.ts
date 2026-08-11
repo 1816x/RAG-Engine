@@ -4,6 +4,7 @@
 import { DEFAULT_RAG_SERVICE_URL } from "./config";
 
 const SERVICE_URL = process.env.RAG_SERVICE_URL ?? DEFAULT_RAG_SERVICE_URL;
+const SERVICE_TIMEOUT_MS = 30_000;
 
 export interface Source {
   chunk_id: number;
@@ -57,6 +58,11 @@ export class RagServiceError extends Error {
   }
 }
 
+function serviceTimeoutMs(): number {
+  const value = Number(process.env.RAG_SERVICE_TIMEOUT_MS);
+  return Number.isInteger(value) && value > 0 ? value : SERVICE_TIMEOUT_MS;
+}
+
 function errorMessage(body: string, status: number): string {
   try {
     const parsed = JSON.parse(body) as { detail?: unknown; error?: unknown };
@@ -82,11 +88,20 @@ function errorMessage(body: string, status: number): string {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${SERVICE_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${SERVICE_URL}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      cache: "no-store",
+      signal: init?.signal ?? AbortSignal.timeout(serviceTimeoutMs()),
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new RagServiceError("RAG service request timed out", 504);
+    }
+    throw error;
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new RagServiceError(errorMessage(body, response.status), response.status);

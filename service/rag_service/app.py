@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import pathlib
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, List
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,6 +62,17 @@ def _positive_env_int(name: str, default: int) -> int:
     return value
 
 
+def _finite_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if not math.isfinite(value):
+        raise RuntimeError(f"{name} must be finite")
+    return value
+
+
 def _add_cors_middleware(target: FastAPI, origins: List[str]) -> None:
     if not origins:
         return
@@ -94,11 +106,18 @@ class BodySizeLimitMiddleware:
         raw_length = headers.get(b"content-length")
         if raw_length is not None:
             try:
-                if int(raw_length) > self.max_bytes:
+                content_length = int(raw_length)
+                if content_length < 0:
+                    raise ValueError
+                if content_length > self.max_bytes:
                     await self._reject(scope, receive, send)
                     return
             except ValueError:
-                pass
+                response = JSONResponse(
+                    {"detail": "invalid Content-Length header"}, status_code=400
+                )
+                await response(scope, receive, send)
+                return
 
         messages: List[Message] = []
         total = 0
@@ -140,7 +159,7 @@ class BodySizeLimitMiddleware:
 _embedder = get_embedder(os.environ.get("RAG_EMBEDDER", "auto"))
 _store = DocumentStore(
     embedder=_embedder,
-    min_score=float(os.environ.get("RAG_MIN_SCORE", "0.09")),
+    min_score=_finite_env_float("RAG_MIN_SCORE", 0.09),
 )
 
 SAMPLE_DOCS = pathlib.Path(__file__).resolve().parent.parent / "sample_docs"

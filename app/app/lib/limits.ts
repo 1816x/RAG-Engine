@@ -25,18 +25,43 @@ export class InputRequestError extends Error {
 }
 
 export async function readLimitedJson<T>(request: Request): Promise<T> {
-  const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > INPUT_LIMITS.requestBytes) {
-    throw new InputRequestError("request body is too large", 413);
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const declaredLength = Number(contentLength);
+    if (!Number.isInteger(declaredLength) || declaredLength < 0) {
+      throw new InputRequestError("content-length header must be a non-negative integer", 400);
+    }
+    if (declaredLength > INPUT_LIMITS.requestBytes) {
+      throw new InputRequestError("request body is too large", 413);
+    }
   }
 
-  const bytes = await request.arrayBuffer();
-  if (bytes.byteLength > INPUT_LIMITS.requestBytes) {
-    throw new InputRequestError("request body is too large", 413);
+  if (!request.body) {
+    throw new InputRequestError("request body must be valid JSON", 400);
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > INPUT_LIMITS.requestBytes) {
+      await reader.cancel();
+      throw new InputRequestError("request body is too large", 413);
+    }
+    chunks.push(value);
   }
 
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch {
     throw new InputRequestError("request body must be valid JSON", 400);
   }
