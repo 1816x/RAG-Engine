@@ -124,6 +124,7 @@ because it inserts directly into the in-process store.
 | `RAG_MAX_QUESTION_CHARS` | `2000` | Maximum query length. |
 | `RAG_MAX_REQUEST_BYTES` | `4194304` | Maximum HTTP request body size (4 MiB), enforced before JSON parsing. |
 | `RAG_CLAUDE_TIMEOUT_SECONDS` | `30` | Claude request timeout; automatic SDK retries are disabled. |
+| `RAG_SERVICE_TIMEOUT_MS` | `30000` | Next.js proxy timeout for calls to the Python service. |
 | `RAG_CORS_ORIGINS` | empty | Exact comma-separated allowed origins. Empty installs no CORS middleware; `*` restores wildcard access explicitly. |
 
 Chunking accepts `max_words` from 1 through 1000 and `overlap` from 0
