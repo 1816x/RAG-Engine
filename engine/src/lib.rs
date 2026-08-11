@@ -21,4 +21,4 @@ mod hnsw;
 pub mod rng;
 
 pub use distance::Metric;
-pub use hnsw::{Error, Hnsw, HnswParams, Neighbor};
+pub use hnsw::{Error, Hnsw, HnswParams, Neighbor, SNAPSHOT_VERSION};

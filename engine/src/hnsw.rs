@@ -16,6 +16,8 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::io::{self, Write};
+use std::path::Path;
 
 use crate::distance::{self, Metric};
 use crate::rng::SplitMix64;
@@ -51,10 +53,32 @@ pub struct Neighbor {
     pub distance: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Error {
     DimensionMismatch { expected: usize, got: usize },
     NonFiniteValue { position: usize },
+    Io(io::Error),
+    InvalidSnapshot(String),
+}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::DimensionMismatch {
+                    expected: a,
+                    got: b,
+                },
+                Self::DimensionMismatch {
+                    expected: c,
+                    got: d,
+                },
+            ) => a == c && b == d,
+            (Self::NonFiniteValue { position: a }, Self::NonFiniteValue { position: b }) => a == b,
+            (Self::InvalidSnapshot(a), Self::InvalidSnapshot(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -72,11 +96,25 @@ impl std::fmt::Display for Error {
                     "vector contains a non-finite value at position {position}"
                 )
             }
+            Error::Io(error) => write!(f, "snapshot I/O error: {error}"),
+            Error::InvalidSnapshot(message) => write!(f, "invalid HNSW snapshot: {message}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+pub const SNAPSHOT_VERSION: u32 = 1;
+const SNAPSHOT_MAGIC: &[u8; 8] = b"HNSWSNP\0";
+const MAX_DIM: usize = 1_000_000;
+const MAX_NODES: usize = u32::MAX as usize;
+const MAX_LEVELS: usize = 128;
 
 /// f32 wrapper with total order so distances can live in heaps.
 #[derive(Clone, Copy, PartialEq)]
@@ -220,6 +258,193 @@ impl Hnsw {
         self.store.metric
     }
 
+    pub fn params(&self) -> HnswParams {
+        self.params
+    }
+
+    /// Encode all durable index state. Scratch search buffers are rebuilt.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(SNAPSHOT_MAGIC);
+        put_u32(&mut out, SNAPSHOT_VERSION);
+        out.push(match self.store.metric {
+            Metric::Euclidean => 0,
+            Metric::Cosine => 1,
+        });
+        out.extend_from_slice(&[0; 3]);
+        put_u64(&mut out, self.store.dim as u64);
+        put_u64(&mut out, self.params.m as u64);
+        put_u64(&mut out, self.params.ef_construction as u64);
+        put_u64(&mut out, self.params.seed);
+        put_u64(&mut out, self.rng.state());
+        put_u64(&mut out, self.store.len() as u64);
+        put_u64(&mut out, self.entry.map_or(u64::MAX, u64::from));
+        put_u64(&mut out, self.top_level as u64);
+        for value in &self.store.data {
+            out.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+        for node in &self.links {
+            put_u32(&mut out, node.len() as u32);
+            for level in node {
+                put_u32(&mut out, level.len() as u32);
+                for &id in level {
+                    put_u32(&mut out, id);
+                }
+            }
+        }
+        let checksum = checksum(&out);
+        put_u64(&mut out, checksum);
+        out
+    }
+
+    /// Decode a checked, versioned snapshot without unsafe deserialization.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < 80 {
+            return invalid("snapshot is truncated");
+        }
+        let (payload, trailer) = bytes.split_at(bytes.len() - 8);
+        let expected = u64::from_le_bytes(trailer.try_into().expect("eight-byte trailer"));
+        if checksum(payload) != expected {
+            return invalid("checksum mismatch");
+        }
+        let mut r = Reader::new(payload);
+        if r.take(8)? != SNAPSHOT_MAGIC {
+            return invalid("bad magic header");
+        }
+        let version = r.u32()?;
+        if version != SNAPSHOT_VERSION {
+            return invalid(format!("unsupported format version {version}"));
+        }
+        let metric = match r.u8()? {
+            0 => Metric::Euclidean,
+            1 => Metric::Cosine,
+            value => return invalid(format!("unknown metric tag {value}")),
+        };
+        if r.take(3)? != [0, 0, 0] {
+            return invalid("non-zero reserved header bytes");
+        }
+        let dim = usize_field(r.u64()?, "dimension", MAX_DIM)?;
+        let m = usize_field(r.u64()?, "m", MAX_NODES / 2)?;
+        let ef_construction = usize_field(r.u64()?, "ef_construction", MAX_NODES)?;
+        let seed = r.u64()?;
+        let rng_state = r.u64()?;
+        let count = usize_field(r.u64()?, "node count", MAX_NODES)?;
+        let entry_raw = r.u64()?;
+        let top_level = usize_field(r.u64()?, "top level", MAX_LEVELS - 1)?;
+        if dim == 0 || m < 2 || ef_construction == 0 {
+            return invalid("impossible index parameters");
+        }
+        let values = count
+            .checked_mul(dim)
+            .ok_or_else(|| Error::InvalidSnapshot("vector count overflow".into()))?;
+        if values > r.remaining() / 4 {
+            return invalid("truncated vector data");
+        }
+        let mut data = Vec::with_capacity(values);
+        for position in 0..values {
+            let value = f32::from_bits(r.u32()?);
+            if !value.is_finite() {
+                return invalid(format!("non-finite vector value at position {position}"));
+            }
+            data.push(value);
+        }
+        let mut links = Vec::with_capacity(count);
+        for node_id in 0..count {
+            let levels = usize_field(u64::from(r.u32()?), "level count", MAX_LEVELS)?;
+            if levels == 0 {
+                return invalid(format!("node {node_id} has no levels"));
+            }
+            let mut node = Vec::with_capacity(levels);
+            for level in 0..levels {
+                let cap = if level == 0 {
+                    m.checked_mul(2)
+                        .ok_or_else(|| Error::InvalidSnapshot("m overflow".into()))?
+                } else {
+                    m
+                };
+                let n = usize_field(u64::from(r.u32()?), "link count", cap)?;
+                let mut neighbors = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let id = r.u32()?;
+                    if id as usize >= count {
+                        return invalid(format!("node {node_id} references invalid node {id}"));
+                    }
+                    neighbors.push(id);
+                }
+                node.push(neighbors);
+            }
+            links.push(node);
+        }
+        if r.remaining() != 0 {
+            return invalid("trailing payload bytes");
+        }
+        let entry = if entry_raw == u64::MAX {
+            None
+        } else {
+            Some(
+                u32::try_from(entry_raw)
+                    .map_err(|_| Error::InvalidSnapshot("entry point is out of range".into()))?,
+            )
+        };
+        if count == 0 {
+            if entry.is_some() || top_level != 0 {
+                return invalid("empty index has an entry point or top level");
+            }
+        } else {
+            let ep = entry.ok_or_else(|| {
+                Error::InvalidSnapshot("non-empty index has no entry point".into())
+            })?;
+            if ep as usize >= count || links[ep as usize].len() != top_level + 1 {
+                return invalid("entry point/top level is inconsistent");
+            }
+            if links.iter().any(|node| node.len() > top_level + 1) {
+                return invalid("node exceeds declared top level");
+            }
+        }
+        Ok(Self {
+            params: HnswParams {
+                m,
+                ef_construction,
+                seed,
+            },
+            store: VectorStore { dim, metric, data },
+            links,
+            entry,
+            top_level,
+            m_max0: m * 2,
+            level_mult: 1.0 / (m as f64).ln(),
+            rng: SplitMix64::new(rng_state),
+            visited: Visited::new(),
+        })
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        let path = path.as_ref();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| Error::InvalidSnapshot("snapshot path has no valid file name".into()))?;
+        let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+        let result = (|| -> Result<(), Error> {
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&self.to_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&tmp, path)?;
+            if let Some(parent) = path.parent() {
+                std::fs::File::open(parent)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(tmp);
+        }
+        result
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
+        Self::from_bytes(&std::fs::read(path)?)
+    }
+
     /// The stored vector for `id` (normalized if the metric is Cosine).
     pub fn vector(&self, id: u32) -> Option<&[f32]> {
         if (id as usize) < self.store.len() {
@@ -361,6 +586,66 @@ impl Hnsw {
     fn random_level(&mut self) -> usize {
         let r = self.rng.next_f64().max(f64::MIN_POSITIVE);
         (-r.ln() * self.level_mult) as usize
+    }
+}
+
+fn put_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn put_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn checksum(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
+}
+fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
+    Err(Error::InvalidSnapshot(message.into()))
+}
+fn usize_field(value: u64, name: &str, max: usize) -> Result<usize, Error> {
+    let value = usize::try_from(value)
+        .map_err(|_| Error::InvalidSnapshot(format!("{name} does not fit this platform")))?;
+    if value > max {
+        return invalid(format!("{name} exceeds supported limit"));
+    }
+    Ok(value)
+}
+struct Reader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
+    }
+    fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| Error::InvalidSnapshot("offset overflow".into()))?;
+        if end > self.bytes.len() {
+            return invalid("snapshot is truncated");
+        }
+        let value = &self.bytes[self.pos..end];
+        self.pos = end;
+        Ok(value)
+    }
+    fn u8(&mut self) -> Result<u8, Error> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Result<u32, Error> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
+    }
+    fn u64(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("eight bytes"),
+        ))
     }
 }
 
