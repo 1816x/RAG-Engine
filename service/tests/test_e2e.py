@@ -93,6 +93,38 @@ def test_uploads_disabled_do_not_modify_the_index(client):
     assert after["chunks"] == before["chunks"]
 
 
+def test_document_lifecycle_endpoints(client, monkeypatch):
+    monkeypatch.setenv("RAG_UPLOADS_ENABLED", "1")
+    created = client.post(
+        "/documents", json={"title": "Saturn", "text": "Saturn ring marker"}
+    ).json()
+    replaced = client.put(
+        f"/documents/{created['id']}",
+        json={"title": "Jupiter", "text": "Jupiter storm marker"},
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["id"] == created["id"]
+    assert replaced.json()["title"] == "Jupiter"
+    assert client.delete(f"/documents/{created['id']}").json() == replaced.json()
+    assert created["id"] not in {doc["id"] for doc in client.get("/documents").json()}
+    assert client.delete(f"/documents/{created['id']}").status_code == 404
+
+
+def test_lifecycle_endpoints_are_disabled(client):
+    assert client.delete("/documents/0").status_code == 403
+    assert client.put("/documents/0", json={"title": "x", "text": "y"}).status_code == 403
+
+
+def test_oversized_replacement_body_returns_413(client, monkeypatch):
+    monkeypatch.setenv("RAG_UPLOADS_ENABLED", "1")
+    response = client.put(
+        "/documents/0",
+        content=b'{"title":"x","text":"' + b"x" * MAX_REQUEST_BYTES + b'"}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -204,6 +236,18 @@ def test_configured_cors_allows_only_the_exact_origin():
 
     assert allowed.headers["access-control-allow-origin"] == "https://allowed.example"
     assert "access-control-allow-origin" not in blocked.headers
+
+    put = cors_client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://allowed.example",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert put.status_code == 200
+    assert "PUT" in put.headers["access-control-allow-methods"]
+    assert "DELETE" in put.headers["access-control-allow-methods"]
 
 
 def test_cors_origin_parser_supports_exact_lists_and_explicit_wildcard(monkeypatch):

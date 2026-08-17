@@ -4,6 +4,7 @@ Owns the index, retrieval, and generation — the Next.js app is a pure UI that
 talks to this. Endpoints:
 
     POST /documents   upload text → chunk → embed → insert into HNSW
+    PUT/DELETE /documents/{id} replace or delete through HNSW compaction
     POST /query       embed question → HNSW search → Claude answer + sources
     GET  /stats       index size / config
     GET  /documents   list indexed documents
@@ -28,7 +29,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .generation import GenerationTimeoutError, generate_answer
-from .store import DocumentStore
+from .store import DocumentNotFoundError, DocumentStore
 from hnsw_rag import get_embedder
 
 log = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def _add_cors_middleware(target: FastAPI, origins: List[str]) -> None:
     target.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -302,6 +303,38 @@ def add_document(doc: DocumentIn) -> DocumentOut:
     result = _store.add_document(
         doc.title, doc.text, max_words=doc.max_words, overlap=doc.overlap
     )
+    return DocumentOut(id=result.id, title=result.title, n_chunks=result.n_chunks)
+
+
+@app.delete(
+    "/documents/{document_id}",
+    response_model=DocumentOut,
+    dependencies=[Depends(_require_uploads_enabled)],
+)
+def delete_document(document_id: int) -> DocumentOut:
+    try:
+        result = _store.delete_document(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DocumentOut(id=result.id, title=result.title, n_chunks=result.n_chunks)
+
+
+@app.put(
+    "/documents/{document_id}",
+    response_model=DocumentOut,
+    dependencies=[Depends(_require_uploads_enabled)],
+)
+def replace_document(document_id: int, doc: DocumentIn) -> DocumentOut:
+    try:
+        result = _store.replace_document(
+            document_id,
+            doc.title,
+            doc.text,
+            max_words=doc.max_words,
+            overlap=doc.overlap,
+        )
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return DocumentOut(id=result.id, title=result.title, n_chunks=result.n_chunks)
 
 

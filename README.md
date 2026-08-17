@@ -135,17 +135,28 @@ buffers are reconstructed rather than serialized. The service wraps that binary
 snapshot with deterministic JSON metadata in a versioned `RAGSTATE` container and
 a BLAKE2b checksum.
 
-Each persistent insertion is staged against a cloned index while holding the store
-lock. The complete container is written to a sibling temporary file, flushed and
+Each persistent corpus mutation is staged while holding the store lock. The
+complete container is written to a sibling temporary file, flushed and
 `fsync`ed, atomically replaced, and its parent directory is `fsync`ed before the
 new in-memory state is published and HTTP success is returned. A failed commit
-therefore retains the previous file and previous live corpus. Corrupt state causes
+therefore retains the previous file and previous live corpus. This transactional
+stage → persist → publish rule applies equally to add, delete, and replace.
+Corrupt state causes
 startup to fail; it is never silently discarded. Stored index settings, embedding
 dimension, backend class, and model name (where applicable) must match the runtime.
 
+Deletion and replacement compact the corpus with a full deterministic HNSW rebuild,
+ordered by ascending document id and then chunk ordinal. Surviving chunks reuse
+their vectors through the index `vector(id)` API; only replacement text is embedded.
+Document ids are stable (and deleted ids are never reused), while internal chunk ids
+may be reassigned so they remain dense and exactly aligned with HNSW vector ids.
+This rebuild is **O(number of live vectors)** and is deliberately chosen for
+correctness and simplicity at the current portfolio/demo scale, not as
+production-scale constant-time deletion.
+
 Limitations: snapshots coordinate one service process only; do not point multiple
 workers or hosts at the same file. Durability ultimately depends on the filesystem's
-`fsync` and atomic-replace semantics. There is no deletion, migration between
+`fsync` and atomic-replace semantics. There is no migration between
 embedder configurations, or automatic recovery of a corrupt snapshot.
 
 ### Public API hardening
@@ -153,7 +164,7 @@ embedder configurations, or automatic recovery of a corrupt snapshot.
 | Variable | Default | Behavior |
 |----------|---------|----------|
 | `RAG_STATE_PATH` | empty | Enables the versioned durable corpus snapshot at the configured file. Empty preserves in-memory behavior. |
-| `RAG_UPLOADS_ENABLED` | `0` | Enables `POST /documents` only when explicitly set to `1`, `true`, `yes`, or `on`. |
+| `RAG_UPLOADS_ENABLED` | `0` | Enables corpus mutations (`POST`, `PUT`, and `DELETE /documents`) only when explicitly set to `1`, `true`, `yes`, or `on`. |
 | `RAG_MAX_TITLE_CHARS` | `200` | Maximum document title length. |
 | `RAG_MAX_DOCUMENT_CHARS` | `1000000` | Maximum document text length. |
 | `RAG_MAX_QUESTION_CHARS` | `2000` | Maximum query length. |
@@ -165,7 +176,7 @@ embedder configurations, or automatic recovery of a corrupt snapshot.
 Chunking accepts `max_words` from 1 through 1000 and `overlap` from 0
 through 999, with overlap strictly smaller than the chunk size. Query `k`
 remains 1 through 50 and `ef_search` is limited to 1 through 2000. Oversized
-bodies return `413`, invalid fields return `422`, disabled uploads return
+bodies return `413`, invalid fields return `422`, disabled corpus mutations return
 `403`, and Claude timeouts return `504`. The Next.js same-origin proxy
 preserves these status codes and service messages.
 

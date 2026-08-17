@@ -124,6 +124,21 @@ export function addDocument(title: string, text: string): Promise<DocumentInfo> 
   });
 }
 
+export function deleteDocument(id: number): Promise<DocumentInfo> {
+  return call<DocumentInfo>(`/documents/${id}`, { method: "DELETE" });
+}
+
+export function replaceDocument(
+  id: number,
+  title: string,
+  text: string,
+): Promise<DocumentInfo> {
+  return call<DocumentInfo>(`/documents/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ title, text }),
+  });
+}
+
 export function listDocuments(): Promise<DocumentInfo[]> {
   return call<DocumentInfo[]>("/documents");
 }
