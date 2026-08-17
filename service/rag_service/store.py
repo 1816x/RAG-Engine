@@ -50,6 +50,10 @@ class RetrievedChunk:
     score: float
 
 
+class DocumentNotFoundError(LookupError):
+    """Raised when a corpus mutation targets an unknown document id."""
+
+
 def _embedder_identity(embedder: Embedder) -> dict:
     identity = {"type": type(embedder).__name__, "dim": embedder.dim}
     model_name = getattr(embedder, "model_name", None)
@@ -281,6 +285,107 @@ class DocumentStore:
             self._index, self._chunks, self._documents = index, chunk_map, document_map
             self._next_doc_id = next_doc_id
             return doc
+
+    def _rebuild(
+        self,
+        documents: Dict[int, Document],
+        replacement: Optional[tuple[int, List[Chunk], List[List[float]]]] = None,
+    ) -> tuple[Hnsw, Dict[int, StoredChunk], Dict[int, Document]]:
+        """Build a dense deterministic graph while reusing every survivor vector.
+
+        The caller holds ``_lock``. Chunks are ordered by document id and ordinal,
+        making the rebuilt HNSW id equal to the new dense chunk metadata id.
+        """
+        replacement_doc_id = replacement[0] if replacement is not None else None
+        replacement_chunks = replacement[1] if replacement is not None else []
+        replacement_vectors = replacement[2] if replacement is not None else []
+        live: List[tuple[int, str, int, List[float]]] = []
+        for doc_id in sorted(documents):
+            document = documents[doc_id]
+            if doc_id == replacement_doc_id:
+                live.extend(
+                    (doc_id, chunk.text, chunk.index, vector)
+                    for chunk, vector in zip(replacement_chunks, replacement_vectors)
+                )
+                continue
+            old_chunks = sorted(
+                (chunk for chunk in self._chunks.values() if chunk.doc_id == doc_id),
+                key=lambda chunk: chunk.ordinal,
+            )
+            live.extend(
+                (doc_id, chunk.text, chunk.ordinal, self._index.vector(chunk.id))
+                for chunk in old_chunks
+            )
+
+        index = self._new_index()
+        ids = index.insert_batch([item[3] for item in live]) if live else []
+        if ids != list(range(len(live))):
+            raise RuntimeError("rebuilt index did not assign dense chunk ids")
+        chunks = {
+            chunk_id: StoredChunk(
+                chunk_id, text, doc_id, documents[doc_id].title, ordinal
+            )
+            for chunk_id, (doc_id, text, ordinal, _) in enumerate(live)
+        }
+        counts = {doc_id: 0 for doc_id in documents}
+        for chunk in chunks.values():
+            counts[chunk.doc_id] += 1
+        rebuilt_documents = {
+            doc_id: Document(doc_id, document.title, counts[doc_id])
+            for doc_id, document in documents.items()
+        }
+        return index, chunks, rebuilt_documents
+
+    def delete_document(self, doc_id: int) -> Document:
+        with self._lock:
+            try:
+                deleted = self._documents[doc_id]
+            except KeyError as exc:
+                raise DocumentNotFoundError(f"document {doc_id} was not found") from exc
+            documents = dict(self._documents)
+            del documents[doc_id]
+            index, chunks, documents = self._rebuild(documents)
+            if self.state_path is not None:
+                self._persist(index, chunks, documents, self._next_doc_id)
+            self._index, self._chunks, self._documents = index, chunks, documents
+            return deleted
+
+    def replace_document(
+        self,
+        doc_id: int,
+        title: str,
+        text: str,
+        *,
+        max_words: int = 180,
+        overlap: int = 40,
+    ) -> Document:
+        with self._lock:
+            if doc_id not in self._documents:
+                raise DocumentNotFoundError(f"document {doc_id} was not found")
+        replacement_chunks = chunk_text(
+            text, max_words=max_words, overlap=overlap, source=title
+        )
+        vectors = (
+            self.embedder.embed([chunk.text for chunk in replacement_chunks])
+            if replacement_chunks
+            else []
+        )
+        if len(vectors) != len(replacement_chunks):
+            raise ValueError(
+                f"embedder returned {len(vectors)} vectors for {len(replacement_chunks)} chunks"
+            )
+        with self._lock:
+            if doc_id not in self._documents:
+                raise DocumentNotFoundError(f"document {doc_id} was not found")
+            documents = dict(self._documents)
+            documents[doc_id] = Document(doc_id, title, len(replacement_chunks))
+            index, chunks, documents = self._rebuild(
+                documents, (doc_id, replacement_chunks, vectors)
+            )
+            if self.state_path is not None:
+                self._persist(index, chunks, documents, self._next_doc_id)
+            self._index, self._chunks, self._documents = index, chunks, documents
+            return documents[doc_id]
 
     def retrieve(
         self, query: str, k: int = 5, ef_search: int = 100

@@ -68,6 +68,8 @@ export default function Home() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const [editingDocumentId, setEditingDocumentId] = useState<number | null>(null);
+  const [mutationDocumentId, setMutationDocumentId] = useState<number | null>(null);
 
   const uploadsEnabled = stats?.uploads_enabled ?? false;
   const titleLimit = stats?.limits.title_chars ?? 200;
@@ -149,25 +151,64 @@ export default function Home() {
     setUploadError(null);
     setUploadNotice(null);
     try {
-      const created = await requestJson<DocumentInfo>("/api/documents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: documentTitle.trim(),
-          text: documentText,
-        }),
-      });
+      const created = await requestJson<DocumentInfo>(
+        editingDocumentId === null
+          ? "/api/documents"
+          : `/api/documents/${editingDocumentId}`,
+        {
+          method: editingDocumentId === null ? "POST" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: documentTitle.trim(),
+            text: documentText,
+          }),
+        },
+      );
       setUploadNotice(
-        `Indexed “${created.title}” as ${created.n_chunks} ${created.n_chunks === 1 ? "chunk" : "chunks"}.`,
+        `${editingDocumentId === null ? "Indexed" : "Replaced"} “${created.title}” as ${created.n_chunks} ${created.n_chunks === 1 ? "chunk" : "chunks"}.`,
       );
       setDocumentTitle("");
       setDocumentText("");
       setFileInputKey((key) => key + 1);
+      setEditingDocumentId(null);
       await loadWorkspace();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Unable to index document");
     } finally {
       setUploadLoading(false);
+    }
+  }
+
+  function beginReplacement(document: DocumentInfo) {
+    setEditingDocumentId(document.id);
+    setDocumentTitle(document.title);
+    setDocumentText("");
+    setUploadError(null);
+    setUploadNotice(`Paste the replacement text for “${document.title}”.`);
+  }
+
+  async function removeDocument(document: DocumentInfo) {
+    if (
+      !uploadsEnabled ||
+      !window.confirm(`Delete “${document.title}” and all of its chunks?`)
+    )
+      return;
+    setMutationDocumentId(document.id);
+    setWorkspaceError(null);
+    try {
+      await requestJson<DocumentInfo>(`/api/documents/${document.id}`, {
+        method: "DELETE",
+      });
+      if (editingDocumentId === document.id) {
+        setEditingDocumentId(null);
+        setDocumentTitle("");
+        setDocumentText("");
+      }
+      await loadWorkspace();
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : "Unable to delete document");
+    } finally {
+      setMutationDocumentId(null);
     }
   }
 
@@ -356,8 +397,14 @@ export default function Home() {
           >
             <div className="panel-heading compact">
               <div>
-                <p className="section-kicker">ADD SOURCE</p>
-                <h3>Index a document</h3>
+                <p className="section-kicker">
+                  {editingDocumentId === null ? "ADD SOURCE" : "REPLACE SOURCE"}
+                </p>
+                <h3>
+                  {editingDocumentId === null
+                    ? "Index a document"
+                    : `Replace document ${editingDocumentId}`}
+                </h3>
               </div>
               <span className={`upload-status ${uploadsEnabled ? "enabled" : "locked"}`}>
                 {stats ? (uploadsEnabled ? "Enabled" : "Locked") : "Loading"}
@@ -429,7 +476,11 @@ export default function Home() {
                   !documentText.trim()
                 }
               >
-                {uploadLoading ? "Indexing…" : "Add to index"}
+                {uploadLoading
+                  ? "Saving…"
+                  : editingDocumentId === null
+                    ? "Add to index"
+                    : "Replace document"}
               </button>
             </div>
 
@@ -470,7 +521,24 @@ export default function Home() {
                       {document.n_chunks} {document.n_chunks === 1 ? "chunk" : "chunks"}
                     </span>
                   </div>
-                  <span className="indexed-mark">Indexed</span>
+                  <div className="document-actions">
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={!uploadsEnabled || mutationDocumentId !== null}
+                      onClick={() => beginReplacement(document)}
+                    >
+                      Replace
+                    </button>
+                    <button
+                      type="button"
+                      className="text-button danger-button"
+                      disabled={!uploadsEnabled || mutationDocumentId !== null}
+                      onClick={() => void removeDocument(document)}
+                    >
+                      {mutationDocumentId === document.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
