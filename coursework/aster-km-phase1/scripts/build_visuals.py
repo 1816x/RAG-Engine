@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import textwrap
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -129,16 +130,18 @@ def graph():
 
 def terminal_image(source_name: str, target_name: str, max_lines: int = 42):
     raw = (EVIDENCE/source_name).read_text(encoding="utf-8").splitlines()[:max_lines]
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 19)
+    lines = [piece for line in raw for piece in (textwrap.wrap(line, width=82,
+             break_long_words=False, replace_whitespace=False) or [""])]
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 24)
     title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
-    width = 1720
-    height = 88+len(raw)*32+26
+    width = 1280
+    height = 88+len(lines)*38+26
     image = Image.new("RGB", (width,height), "#142237")
     draw = ImageDraw.Draw(image)
     draw.rectangle((0,0,width,62),fill="#20334c")
     draw.text((28,18),f"Captured execution output · {source_name}",font=title_font,fill="#e6f0f7")
-    for n,line in enumerate(raw):
-        draw.text((28,82+n*32),line[:130],font=font,fill="#d7e7f2")
+    for n,line in enumerate(lines):
+        draw.text((28,82+n*38),line,font=font,fill="#d7e7f2")
     image.save(EVIDENCE/target_name)
 
 

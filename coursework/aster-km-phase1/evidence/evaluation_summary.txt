@@ -1,0 +1,11 @@
+PYTHONPATH=src python -m km_proto.cli evaluate
+Corpus: 32 fictional documents; 4 balanced categories
+Stratified holdout: 24 train / 8 test
+Holdout accuracy: 1.000 (8/8 correct)
+3-fold CV accuracy: 0.909, 0.909, 1.000
+CV mean: 0.939
+Confusion matrix (IR, TG, TP, RN):
+  [2, 0, 0, 0]
+  [0, 2, 0, 0]
+  [0, 0, 2, 0]
+  [0, 0, 0, 2]

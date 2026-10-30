@@ -1,0 +1,28 @@
+name: Aster KM CI
+
+on:
+  push:
+    branches: ["coursework/aster-km-phase1"]
+    paths:
+      - "coursework/aster-km-phase1/**"
+      - ".github/workflows/aster-km.yml"
+  workflow_dispatch:
+
+jobs:
+  prototype:
+    name: Classification and retrieval
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: coursework/aster-km-phase1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Run demo
+        run: PYTHONPATH=src python -m km_proto.cli demo
