@@ -1,0 +1,2 @@
+Category: Incident Report | model score: 0.358
+Category: Release Note | model score: 0.384

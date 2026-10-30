@@ -1,0 +1,3 @@
+Map rendering setup
+
+The manual explains map layer configuration, cache refresh, filter settings, and rendering service dependencies. It includes prerequisite access, log paths, administrator verification commands, and recovery steps for a missing layer.

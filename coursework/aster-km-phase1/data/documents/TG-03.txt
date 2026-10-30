@@ -1,0 +1,3 @@
+Telemetry feed troubleshooting
+
+This operations runbook describes how to inspect ingestion lag, check telemetry feed health, locate processing logs, and recover a stalled pipeline. The guide includes prerequisites, diagnostic commands, decision points, and safe restart instructions.

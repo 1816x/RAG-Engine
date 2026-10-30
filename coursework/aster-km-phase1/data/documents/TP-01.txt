@@ -1,0 +1,3 @@
+Reproduce reconnect freeze
+
+This test procedure specifies prerequisites, test data, and repeatable steps: open the command display, interrupt the connection, reconnect, and measure response time. The expected result is a responsive display; record actual behavior, logs, pass or fail, and defect reference.

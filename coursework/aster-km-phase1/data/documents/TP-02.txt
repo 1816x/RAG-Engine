@@ -1,0 +1,3 @@
+Verify session expiration interval
+
+A QA test case defines setup, credentials, clock synchronization, and steps for measuring login session lifetime. Compare actual timeout with the expected interval, record pass or fail, attach evidence, and link the defect if the session expires early.

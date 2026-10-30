@@ -1,0 +1,3 @@
+Alert banner missing during failover
+
+The help desk received an incident report describing a missing alert banner during failover. The ticket states observed result, expected behavior, user impact, incident status open, priority high, evidence screenshot, and affected command software.

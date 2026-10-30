@@ -1,0 +1,3 @@
+Command display freezes after reconnect
+
+Support received an incident report from an operator: the command display froze after a network reconnect. The record includes observed behavior, impact, priority high, timestamp, error logs, affected software system, and assignment to engineering for investigation.

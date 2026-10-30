@@ -1,0 +1,33 @@
+id,title,category,area,concept,file
+IR-01,Command display freezes after reconnect,Incident Report,Support,Reconnect timeout,IR-01.txt
+IR-02,Login session expires early,Incident Report,Support,Authentication,IR-02.txt
+IR-03,Telemetry panel shows stale values,Incident Report,Support,Telemetry,IR-03.txt
+IR-04,Alert banner missing during failover,Incident Report,Support,Failover alert,IR-04.txt
+IR-05,Search results duplicate records,Incident Report,Support,Duplicate search,IR-05.txt
+IR-06,Export request returns error,Incident Report,Support,Export failure,IR-06.txt
+IR-07,Map layer fails to load,Incident Report,Support,Map rendering,IR-07.txt
+IR-08,Notification repeats after acknowledgment,Incident Report,Support,Notification,IR-08.txt
+TG-01,Display recovery runbook,Technical Guide,Operations,Reconnect timeout,TG-01.txt
+TG-02,Authentication service configuration,Technical Guide,Operations,Authentication,TG-02.txt
+TG-03,Telemetry feed troubleshooting,Technical Guide,Operations,Telemetry,TG-03.txt
+TG-04,Failover alert configuration,Technical Guide,Operations,Failover alert,TG-04.txt
+TG-05,Search index maintenance,Technical Guide,Operations,Duplicate search,TG-05.txt
+TG-06,Report export operations,Technical Guide,Operations,Export failure,TG-06.txt
+TG-07,Map rendering setup,Technical Guide,Operations,Map rendering,TG-07.txt
+TG-08,Notification queue maintenance,Technical Guide,Operations,Notification,TG-08.txt
+TP-01,Reproduce reconnect freeze,Test Procedure,Quality Assurance,Reconnect timeout,TP-01.txt
+TP-02,Verify session expiration interval,Test Procedure,Quality Assurance,Authentication,TP-02.txt
+TP-03,Check telemetry freshness,Test Procedure,Quality Assurance,Telemetry,TP-03.txt
+TP-04,Validate failover banner,Test Procedure,Quality Assurance,Failover alert,TP-04.txt
+TP-05,Test duplicate search filtering,Test Procedure,Quality Assurance,Duplicate search,TP-05.txt
+TP-06,Exercise export timeout boundary,Test Procedure,Quality Assurance,Export failure,TP-06.txt
+TP-07,Verify map layer filters,Test Procedure,Quality Assurance,Map rendering,TP-07.txt
+TP-08,Check notification acknowledgment,Test Procedure,Quality Assurance,Notification,TP-08.txt
+RN-01,Release 2.4.1 reconnect correction,Release Note,Engineering,Reconnect timeout,RN-01.txt
+RN-02,Release 2.4.2 session lifetime fix,Release Note,Engineering,Authentication,RN-02.txt
+RN-03,Release 2.4.3 telemetry refresh,Release Note,Engineering,Telemetry,RN-03.txt
+RN-04,Release 2.4.4 failover banner,Release Note,Engineering,Failover alert,RN-04.txt
+RN-05,Release 2.4.5 search deduplication,Release Note,Engineering,Duplicate search,RN-05.txt
+RN-06,Release 2.4.6 export stability,Release Note,Engineering,Export failure,RN-06.txt
+RN-07,Release 2.4.7 map layer loading,Release Note,Engineering,Map rendering,RN-07.txt
+RN-08,Release 2.4.8 notification retry,Release Note,Engineering,Notification,RN-08.txt

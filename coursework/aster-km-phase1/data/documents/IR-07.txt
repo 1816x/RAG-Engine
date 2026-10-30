@@ -1,0 +1,3 @@
+Map layer fails to load
+
+An operator contacted support because a map layer failed to load after changing filters. The incident report records steps observed by the caller, system name, screenshot evidence, severity medium, status under investigation, and diagnostic log location.

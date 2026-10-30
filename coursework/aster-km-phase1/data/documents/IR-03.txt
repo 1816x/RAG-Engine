@@ -1,0 +1,3 @@
+Telemetry panel shows stale values
+
+Support logged an incident when the telemetry panel displayed stale values after a data feed interruption. The report records time, impacted system, symptoms, priority high, diagnostic logs, reporter, and escalation to an engineer.

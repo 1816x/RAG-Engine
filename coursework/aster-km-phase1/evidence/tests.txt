@@ -1,0 +1,10 @@
+test_corpus_has_balanced_categories_and_unique_ids (test_core.PrototypeTests.test_corpus_has_balanced_categories_and_unique_ids) ... ok
+test_empty_search_rejected (test_core.PrototypeTests.test_empty_search_rejected) ... ok
+test_holdout_evaluation_has_no_training_leak (test_core.PrototypeTests.test_holdout_evaluation_has_no_training_leak) ... ok
+test_new_document_classification (test_core.PrototypeTests.test_new_document_classification) ... ok
+test_search_ranks_relevant_test_procedure (test_core.PrototypeTests.test_search_ranks_relevant_test_procedure) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.125s
+
+OK

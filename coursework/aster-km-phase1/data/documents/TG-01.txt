@@ -1,0 +1,3 @@
+Display recovery runbook
+
+This technical guide explains how to inspect display service health, verify the reconnect queue, read timeout logs, and restart the affected component under approved operations procedure. The runbook lists prerequisites, commands, rollback precautions, and escalation contacts.

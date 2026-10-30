@@ -1,0 +1,3 @@
+Check notification acknowledgment
+
+This QA procedure sends a test notification, acknowledges it once, waits through the retry interval, and checks for duplicates. Expected result is no repeated message. Record actual count, pass or fail, timestamps, and evidence.

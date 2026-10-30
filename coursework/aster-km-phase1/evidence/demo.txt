@@ -1,0 +1,13 @@
+Loaded 32 fictional documents across 4 categories
+CLASSIFY The operator reported a blank command display, with logs and severity recorded for triage.
+  => Incident Report (model score 0.358)
+CLASSIFY Version 2.4.1 fixes the timeout and lists deployment notes and rollback impact.
+  => Release Note (model score 0.384)
+SEARCH How can QA measure early login session expiration interval with expected results?
+  1. TP-02 | Verify session expiration interval | Test Procedure | cosine=0.373
+  2. IR-02 | Login session expires early | Incident Report | cosine=0.225
+  3. RN-02 | Release 2.4.2 session lifetime fix | Release Note | cosine=0.166
+SEARCH Which release corrected the display timeout and what changed?
+  1. RN-01 | Release 2.4.1 reconnect correction | Release Note | cosine=0.152
+  2. RN-03 | Release 2.4.3 telemetry refresh | Release Note | cosine=0.143
+  3. RN-05 | Release 2.4.5 search deduplication | Release Note | cosine=0.132

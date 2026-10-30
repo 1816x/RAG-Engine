@@ -1,0 +1,3 @@
+Search index maintenance
+
+This guide covers search index maintenance and duplicate record troubleshooting. It provides commands for index inspection, synchronization checks, backup steps, safe rebuild procedure, rollback plan, and operational escalation.

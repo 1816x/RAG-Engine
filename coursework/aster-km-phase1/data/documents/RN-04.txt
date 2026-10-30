@@ -1,0 +1,3 @@
+Release 2.4.4 failover banner
+
+The version 2.4.4 changelog records a fix to alert banner visibility during failover. It summarizes the resolved incident, package changes, test verification, deployment prerequisites, known issues, and rollback plan.

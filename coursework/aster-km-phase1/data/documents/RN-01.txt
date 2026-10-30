@@ -1,0 +1,3 @@
+Release 2.4.1 reconnect correction
+
+Release notes for version 2.4.1 describe a correction to reconnect timeout handling in the command display. The change summary cites the incident, deployment impact, compatibility, validation result, known limitations, and rollback instructions.

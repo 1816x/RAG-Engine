@@ -1,0 +1,3 @@
+Search results duplicate records
+
+An analyst reported duplicate entries in search results after a sync event. Support created an incident record with the observed symptom, affected index service, log excerpt, severity low, timeline, reporter, and triage assignment.

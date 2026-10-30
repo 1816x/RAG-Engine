@@ -1,0 +1,3 @@
+Verify map layer filters
+
+The test case sets map filters, loads the layer, and changes filter values in a repeatable sequence. Expected results specify visible tiles and response time. Record observed rendering, screenshot evidence, pass or fail, and issue link.

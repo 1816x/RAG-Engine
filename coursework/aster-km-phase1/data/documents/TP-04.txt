@@ -1,0 +1,3 @@
+Validate failover banner
+
+This QA procedure begins with a standby node and a controlled failover event. Execute the numbered steps, verify the expected alert banner appears, collect screenshots, record actual outcome, pass or fail, and link any defect.

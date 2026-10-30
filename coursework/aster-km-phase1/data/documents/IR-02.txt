@@ -1,0 +1,3 @@
+Login session expires early
+
+An operator reported a login session expiring before the configured interval. Support captured an incident ticket with reproduction context, user impact, authentication error log, severity medium, and affected access service. The engineer will investigate the reported failure.

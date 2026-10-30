@@ -1,0 +1,3 @@
+Release 2.4.3 telemetry refresh
+
+Release 2.4.3 documents the telemetry refresh correction and improved feed recovery. The notes list changed components, related issue, validation status, deployment impact, remaining limitations, and rollback procedure.

@@ -1,0 +1,3 @@
+Test duplicate search filtering
+
+A test case seeds sample records, triggers synchronization, and runs the same search query twice. The expected result is one record per identifier. Record actual result count, pass or fail, test evidence, and defect identifier.

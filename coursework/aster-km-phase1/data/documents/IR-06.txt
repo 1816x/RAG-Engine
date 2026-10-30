@@ -1,0 +1,3 @@
+Export request returns error
+
+Support documented an incident where an export request returned an error after several minutes. The ticket includes client impact, error code, request timestamp, affected reporting system, priority medium, and engineer assignment.

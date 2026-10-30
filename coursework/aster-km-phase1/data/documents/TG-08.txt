@@ -1,0 +1,3 @@
+Notification queue maintenance
+
+This technical runbook describes notification queue inspection, acknowledgment settings, message retry controls, and safe worker restart. It gives operations staff configuration steps, monitoring commands, and rollback precautions.

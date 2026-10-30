@@ -1,0 +1,3 @@
+Exercise export timeout boundary
+
+This test procedure defines a large export dataset, environment setup, numbered execution steps, and expected completion time. QA records actual response, error code, pass or fail, logs, and a linked defect if export fails.

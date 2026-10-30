@@ -1,0 +1,3 @@
+Failover alert configuration
+
+The technical manual documents alert routing settings for a failover environment. Administrators can check notification rules, verify banner permissions, inspect service logs, and follow a controlled configuration and recovery procedure.

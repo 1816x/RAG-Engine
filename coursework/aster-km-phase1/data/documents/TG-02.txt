@@ -1,0 +1,3 @@
+Authentication service configuration
+
+The configuration manual explains session lifetime settings and authentication service dependencies. It describes approved parameter values, configuration file locations, verification commands, access controls, and operational troubleshooting steps for administrators.

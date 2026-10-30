@@ -1,0 +1,3 @@
+Check telemetry freshness
+
+The reproducible test case injects a feed interruption and restoration while monitoring telemetry timestamps. Steps and expected results define freshness thresholds; testers capture actual values, pass or fail status, logs, and evidence.

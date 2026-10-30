@@ -1,0 +1,3 @@
+Report export operations
+
+The operations guide describes export worker configuration, queue monitoring, timeout settings, and storage permissions. It lists diagnostics, administrator commands, safe service recovery, and escalation criteria for failed exports.

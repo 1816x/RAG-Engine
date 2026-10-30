@@ -1,0 +1,3 @@
+Notification repeats after acknowledgment
+
+A support specialist opened an incident for repeated notifications after acknowledgment. The record identifies the affected message service, user impact, priority medium, timestamp, logs, reported symptom, and ownership for engineering triage.
